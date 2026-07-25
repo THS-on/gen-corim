@@ -40,6 +40,8 @@ func Test_RootCmd_help(t *testing.T) {
 	assert.Contains(t, out, "Generate a CoRIM from an attestation token or platform report.")
 	assert.Contains(t, out, "--template-dir")
 	assert.Contains(t, out, "--signing-key")
+	assert.Contains(t, out, "--signing-cert")
+	assert.Contains(t, out, "--intermediate-certs")
 	assert.Contains(t, out, "generate a test CoRIM")
 
 	// the scheme binds its own flags, and documents itself
@@ -176,6 +178,15 @@ func Test_SchemeCmd_errors(t *testing.T) {
 			factory:  newTestScheme,
 			args:     []string{"test", "evidence.cbor", "--template-dir=templates", "--format=diag"},
 			expected: `unsupported format "diag"`,
+		},
+		{
+			// not a flag group either: --signing-key is usable on its
+			// own, it is only the certificate that depends on it
+			name:    "signing cert without a signing key",
+			factory: newTestScheme,
+			args: []string{"test", "evidence.cbor",
+				"--template-dir=templates", "--signing-cert=cert.der"},
+			expected: "a signing certificate is only meaningful with a signing key",
 		},
 		{
 			name:     "scheme failure",

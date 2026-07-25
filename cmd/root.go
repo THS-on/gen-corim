@@ -57,6 +57,10 @@ unless --seed is given.
 		"prefix turning the generated ids from UUIDs into strings of the prefix followed by a UUID")
 	flags.StringVar(&opts.SigningKey, "signing-key", "",
 		"JWK used to sign the generated CoRIM; if unset, an unsigned CoRIM is produced")
+	flags.StringVar(&opts.SigningCert, "signing-cert", "",
+		"X.509 certificate for the signing key, embedded in the signed CoRIM")
+	flags.StringVar(&opts.IntermediateCerts, "intermediate-certs", "",
+		"certificates completing the chain from the signing certificate, embedded alongside it")
 
 	// --corim-file is the full output path, so it has no use for a directory.
 	cmd.MarkFlagsMutuallyExclusive("output-dir", "corim-file")
