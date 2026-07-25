@@ -3,5 +3,8 @@
 
 package main
 
+import "github.com/veraison/gen-corim/cmd"
+
 func main() {
+	cmd.Execute()
 }

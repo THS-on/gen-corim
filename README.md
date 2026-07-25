@@ -21,6 +21,20 @@ go install github.com/veraison/gen-corim@latest
 gen-corim <scheme> <evidence-file> [flags]
 ```
 
+Common flags:
+
+| flag | short | default | meaning |
+|---|---|---|---|
+| `--template-dir` | `-t` | *required* | directory holding `corim-template.json` and `comid-template.json` |
+| `--output-dir` | `-o` | `.` | directory the generated CoRIM is written to |
+| `--corim-file` | `-c` | | full output path; only valid when the run produces one CoRIM |
+| `--format` | | `cbor` | `cbor` or `json` |
+| `--seed` | | | seed the generated ids are derived from; random if unset |
+| `--id-prefix` | | | make the generated ids strings of this prefix followed by a UUID |
+
+`--output-dir` and `--corim-file` are mutually exclusive: `--corim-file` is the
+whole path, so passing both is an error rather than one of them being ignored.
+
 Supported schemes are documented below as they are added.
 
 ## Developing
