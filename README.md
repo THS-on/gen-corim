@@ -36,6 +36,9 @@ gen-corim <scheme> <evidence-file> [flags]
 | `--format` | | `cbor` | `cbor` or `json` |
 | `--seed` | | | seed the generated ids are derived from; random if unset |
 | `--id-prefix` | | | make the generated ids strings of this prefix followed by a UUID |
+| `--signing-key` | | | JWK used to produce a signed CoRIM |
+| `--signing-cert` | | | X.509 certificate for the signing key, embedded in the signed CoRIM |
+| `--intermediate-certs` | | | certificates completing the chain from the signing certificate |
 | `--key` | `-k` | | key or certificate the evidence signature is checked against |
 | `--skip-verify` | | `false` | generate without checking the evidence signature |
 | `--trust-anchors` | | | anchors the certificate in `--key` is verified to; repeatable |
@@ -45,7 +48,7 @@ gen-corim <scheme> <evidence-file> [flags]
 `--output-dir` and `--corim-file` are mutually exclusive, and passing both is an error rather
 than one of them being ignored. `--key` is required unless `--skip-verify` is given. Output is
 named `<scheme>[-<label>]-endorsements.<format>`, the label telling apart the CoRIMs of a run
-that produces several, unless `--corim-file` says otherwise.
+that produces several, unless `--corim-file` says otherwise. A signed CoRIM is always CBOR.
 
 ### Verification
 
@@ -67,6 +70,26 @@ and any of the three with `--skip-verify`, are errors rather than flags with no 
 `snp` has. Anchors never come from the OS trust store: the roots of these formats are
 published by their vendors.
 
+### Signing
+
+`--signing-key` takes a JWK. If it carries a `kid`, the UTF-8 bytes of that `kid` become the
+key id of the COSE message, which is how `cocli corim sign` writes it too.
+
+`--signing-cert` and `--intermediate-certs` populate the `x5chain` header, so that a verifier
+can build a path from the CoRIM to a trust anchor of its own. Both accept PEM or DER, and
+`--intermediate-certs` takes a concatenation, ordered from the issuer of the signing
+certificate outwards. A certificate that does not certify `--signing-key` is rejected: the
+result would be a CoRIM no verifier could accept.
+
+```sh
+gen-corim psa data/psa/psa-evidence.cbor \
+	--key=data/keys/es256-pub.json \
+	--template-dir=data/templates/psa \
+	--signing-key=data/keys/es256-priv.json \
+	--signing-cert=signer.pem \
+	--intermediate-certs=chain.pem
+```
+
 Every example below runs as written from a clone of this repository.
 
 ### Templates
@@ -78,6 +101,7 @@ the directory named by `--template-dir`.
 |---|---|---|
 | `corim-template.json` | `entities`, `validity`, `dependent-rims` | always |
 | `comid-template.json` | `lang`, `tag-identity.version`, `entities` | always |
+| `meta-template.json` | the signer of the CoRIM | only with `--signing-key` |
 
 Working examples are under [data/templates](data/templates).
 
@@ -254,7 +278,7 @@ of the code that wrote it.
 Implement [`scheme.Scheme`](scheme/scheme.go) in a package under `schemes/`, then add its
 constructor to `DefaultSchemes` in [cmd/schemes.go](cmd/schemes.go). A scheme supplies its
 command metadata, its flags, and a `Generate` method returning the CoMIDs to wrap. Template
-handling, tag identities, CoRIM assembly, encoding and file naming are all shared.
+handling, tag identities, CoRIM assembly, signing, encoding and file naming are all shared.
 
 ## License
 
