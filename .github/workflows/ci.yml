@@ -1,0 +1,24 @@
+name: ci
+on: [push, pull_request]
+jobs:
+
+  tests:
+    name: Test on ${{matrix.os}}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 1
+    - uses: actions/setup-go@v5
+      with:
+        go-version: "1.26"
+    - name: Build project
+      run: make build
+    - name: Run tests
+      run: |
+        go version
+        make test
