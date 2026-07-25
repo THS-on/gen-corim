@@ -19,12 +19,14 @@ updates this file in the same commit.
 | `cca/tf-rmm/cca_token.cbor` | [veraison/ccatoken](https://github.com/veraison/ccatoken) | `realm/testvectors/tf-rmm/cca_token.cbor` | `cfb829e` | Apache-2.0 |
 | `cca/tf-rmm/cca_platform.pub` | [veraison/ccatoken](https://github.com/veraison/ccatoken) | `realm/testvectors/tf-rmm/cca_platform.pub` | `cfb829e` | Apache-2.0 |
 | `snp/report.bin` | [jraman567/go-gen-ref](https://github.com/jraman567/go-gen-ref) | `sample/sevsnp/report.bin` | `c942092` | Apache-2.0 |
+| `snp/OVMF_CODE.cc.fd` | [jraman567/go-gen-ref](https://github.com/jraman567/go-gen-ref) | `sample/sevsnp/OVMF_CODE.cc.fd` | `c942092` | Apache-2.0 |
 
 ## Derived
 
 | local | derived from | how |
 |---|---|---|
 | `keys/wrong-es256.json` | `testAltIAK` in [veraison/ccatoken](https://github.com/veraison/ccatoken) `test_common.go` (`cfb829e`) | the JWK literal extracted into a file |
+| `snp/launch-config.json` | `sample/sevsnp/vmconfig.yaml` in [jraman567/go-gen-ref](https://github.com/jraman567/go-gen-ref) (`c942092`) | converted to JSON, `maxvcpus` and `model` renamed to `max-vcpus` and `cpu-model` |
 
 ## Notes
 

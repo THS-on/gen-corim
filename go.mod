@@ -23,6 +23,7 @@ require (
 	github.com/lestrrat-go/jwx/v2 v2.0.21
 	github.com/veraison/ccatoken v1.4.0
 	github.com/veraison/psatoken v1.2.1-0.20251211083527-a6e46122bbca
+	github.com/virtee/sev-snp-measure-go v0.0.0-20260408174629-fd0cc4c95d62
 )
 
 require (

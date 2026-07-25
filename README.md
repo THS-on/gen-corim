@@ -71,6 +71,11 @@ no attestation verification key triple.
 ### snp
 
 ```sh
+# describe VMs that have not been launched yet
+gen-corim snp report.bin --launch-config=launch.json \
+	--ovmf=OVMF_CODE.fd --template-dir=data/templates/snp
+
+# describe the machine the report came from
 gen-corim snp report.bin --template-dir=data/templates/snp
 ```
 
@@ -78,9 +83,18 @@ Generates AMD SEV-SNP reference values under the
 `tag:amd.com,2025:snp-corim-profile` profile, superseding
 [go-gen-ref](https://github.com/jraman567/go-gen-ref).
 
-The launch measurement is taken from the report as it stands, so the reference
-values describe the machine the report came from - its own measurement already
-binds the vCPU count, CPU model and firmware of that machine.
+A launch measurement depends on the vCPU count, so with `--ovmf` and
+`--launch-config` one is computed for every count from 1 up to `max-vcpus`, and
+a CoMID is generated for each. The launch config is JSON:
+
+```json
+{ "max-vcpus": 4, "cpu-model": "EPYC-Milan-v2" }
+```
+
+With neither flag the launch measurement is taken from the report as it stands
+and a single CoMID is generated - the report's own measurement already binds the
+vCPU count, CPU model and firmware of the machine that produced it, which is why
+no launch config is accepted in that mode.
 
 ## Developing
 

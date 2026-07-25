@@ -24,10 +24,16 @@ import (
 var update = flag.Bool("update", false, "regenerate the golden CoRIMs")
 
 const (
-	testReport   = "../../data/snp/report.bin"
-	testTemplate = "../../data/templates/snp"
+	testReport       = "../../data/snp/report.bin"
+	testOVMF         = "../../data/snp/OVMF_CODE.cc.fd"
+	testLaunchConfig = "../../data/snp/launch-config.json"
+	testTemplate     = "../../data/templates/snp"
 
 	goldenDir = "../../data/golden"
+
+	// the vCPU count in launch-config.json, and so the number of CoMIDs a
+	// synthesized run produces
+	testMaxVCPUs = 4
 )
 
 // newFlagSet returns the scheme's flags, bound to that scheme instance.
@@ -99,8 +105,8 @@ func reportMeasurement(t *testing.T) []byte {
 	return report.GetMeasurement()
 }
 
-// The launch measurement is the report's own, and exactly one CoMID is
-// produced: the report already binds a single VM shape.
+// In as-reported mode the launch measurement is the report's own, and exactly
+// one CoMID is produced: the report already binds a single VM shape.
 func Test_Generate_as_reported(t *testing.T) {
 	payloads, err := generate(t, testReport)
 	require.NoError(t, err)
@@ -113,6 +119,30 @@ func Test_Generate_as_reported(t *testing.T) {
 	require.NoError(t, m.Valid())
 
 	assert.Equal(t, reportMeasurement(t), launchMeasurementOf(t, m))
+}
+
+// In synthesized mode there is one CoMID per vCPU count, each with its own
+// launch measurement, and none of them is the report's.
+func Test_Generate_synthesized(t *testing.T) {
+	payloads, err := generate(t, testReport,
+		"--ovmf="+testOVMF, "--launch-config="+testLaunchConfig)
+	require.NoError(t, err)
+	require.Len(t, payloads, 1)
+	require.Len(t, payloads[0].Comids, testMaxVCPUs)
+
+	seen := make(map[string]bool, testMaxVCPUs)
+
+	for _, m := range payloads[0].Comids {
+		require.NoError(t, m.Valid())
+
+		digest := launchMeasurementOf(t, m)
+		assert.Len(t, digest, 48, "the launch measurement is a SHA-384 digest")
+
+		// the launch measurement depends on the vCPU count, which is the
+		// reason for generating one CoMID per count
+		assert.False(t, seen[string(digest)], "duplicate launch measurement")
+		seen[string(digest)] = true
+	}
 }
 
 func Test_Generate_measurement_keys(t *testing.T) {
@@ -276,10 +306,40 @@ func Test_Generate_errors(t *testing.T) {
 			expected: "error loading report from",
 		},
 		{
-			// a CoMID template is not a report
+			// a launch config is not a report
 			name:     "not a report",
-			report:   testTemplate + "/comid-template.json",
+			report:   testLaunchConfig,
 			expected: "error decoding report from",
+		},
+		{
+			// the two flags are meaningless apart: one says what to
+			// measure, the other what to measure it for
+			name:   "ovmf without a launch config",
+			report: testReport,
+			args:   []string{"--ovmf=" + testOVMF},
+			expected: "--ovmf and --launch-config must be used together: supply both to " +
+				"compute launch measurements, or neither to use the one in the report",
+		},
+		{
+			name:     "launch config without ovmf",
+			report:   testReport,
+			args:     []string{"--launch-config=" + testLaunchConfig},
+			expected: "--ovmf and --launch-config must be used together",
+		},
+		{
+			name:   "absent ovmf",
+			report: testReport,
+			args: []string{
+				"--ovmf=../../data/snp/absent.fd", "--launch-config=" + testLaunchConfig},
+			expected: "error loading OVMF from",
+		},
+		{
+			// a report is not a launch config
+			name:   "bad launch config",
+			report: testReport,
+			args: []string{
+				"--ovmf=" + testOVMF, "--launch-config=" + testReport},
+			expected: "error decoding launch configuration from",
 		},
 	} {
 		t.Run(tv.name, func(t *testing.T) {
@@ -290,44 +350,95 @@ func Test_Generate_errors(t *testing.T) {
 }
 
 func Test_Generate_golden(t *testing.T) {
-	fs := afero.NewOsFs()
+	for _, tv := range []struct {
+		name   string
+		args   []string
+		golden string
+	}{
+		{
+			name:   "as reported",
+			golden: "snp-endorsements.cbor",
+		},
+		{
+			name: "synthesized",
+			args: []string{
+				"--ovmf=" + testOVMF,
+				"--launch-config=" + testLaunchConfig,
+			},
+			golden: "snp-synthesized-endorsements.cbor",
+		},
+	} {
+		t.Run(tv.name, func(t *testing.T) {
+			fs := afero.NewOsFs()
 
-	s := New()
+			s := New()
+			flags := newFlagSet(t, s)
+			require.NoError(t, flags.Parse(tv.args))
 
-	opts := &generator.Options{
-		TemplateDir: testTemplate,
-		OutputDir:   t.TempDir(),
-		Format:      generator.FormatCBOR,
-		Seed:        "golden",
+			opts := &generator.Options{
+				TemplateDir: testTemplate,
+				OutputDir:   t.TempDir(),
+				Format:      generator.FormatCBOR,
+				Seed:        "golden",
+			}
+
+			g, err := generator.New(fs, opts, "snp")
+			require.NoError(t, err)
+
+			payloads, err := s.Generate(fs, g, []string{testReport})
+			require.NoError(t, err)
+
+			paths, err := g.Write(payloads)
+			require.NoError(t, err)
+			require.Len(t, paths, 1)
+
+			got, err := afero.ReadFile(fs, paths[0])
+			require.NoError(t, err)
+
+			golden := filepath.Join(goldenDir, tv.golden)
+
+			if *update {
+				require.NoError(t, fs.MkdirAll(goldenDir, 0755))
+				require.NoError(t, afero.WriteFile(fs, golden, got, 0644))
+				return
+			}
+
+			want, err := afero.ReadFile(fs, golden)
+			require.NoError(t, err, "golden file missing; regenerate with -update")
+			assert.Equal(t, want, got)
+
+			_, err = corim.UnmarshalAndValidateUnsignedCorimFromCBOR(want)
+			assert.NoError(t, err)
+		})
 	}
+}
 
-	g, err := generator.New(fs, opts, "snp")
-	require.NoError(t, err)
-
-	payloads, err := s.Generate(fs, g, []string{testReport})
-	require.NoError(t, err)
-
-	paths, err := g.Write(payloads)
-	require.NoError(t, err)
-	require.Len(t, paths, 1)
-
-	got, err := afero.ReadFile(fs, paths[0])
-	require.NoError(t, err)
-
-	golden := filepath.Join(goldenDir, "snp-endorsements.cbor")
-
-	if *update {
-		require.NoError(t, fs.MkdirAll(goldenDir, 0755))
-		require.NoError(t, afero.WriteFile(fs, golden, got, 0644))
-		return
+func Test_LaunchConfig_Valid(t *testing.T) {
+	for _, tv := range []struct {
+		name     string
+		config   LaunchConfig
+		expected string
+	}{
+		{
+			name:     "no vcpus",
+			config:   LaunchConfig{CPUModel: "EPYC-Milan-v2"},
+			expected: "max-vcpus must be at least 1, got 0",
+		},
+		{
+			name:     "negative vcpus",
+			config:   LaunchConfig{MaxVCPUs: -1, CPUModel: "EPYC-Milan-v2"},
+			expected: "max-vcpus must be at least 1, got -1",
+		},
+		{
+			name:     "no cpu model",
+			config:   LaunchConfig{MaxVCPUs: 4},
+			expected: "cpu-model not specified",
+		},
+	} {
+		t.Run(tv.name, func(t *testing.T) {
+			assert.EqualError(t, tv.config.Valid(), tv.expected)
+		})
 	}
-
-	want, err := afero.ReadFile(fs, golden)
-	require.NoError(t, err, "golden file missing; regenerate with -update")
-	assert.Equal(t, want, got)
-
-	_, err = corim.UnmarshalAndValidateUnsignedCorimFromCBOR(want)
-	assert.NoError(t, err)
 }
 
 // New must hand out independent flag state, so that one command cannot see the

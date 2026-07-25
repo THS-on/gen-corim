@@ -1,0 +1,4 @@
+{
+    "max-vcpus": 4,
+    "cpu-model": "EPYC-Milan-v2"
+}
