@@ -51,3 +51,10 @@ require (
 	google.golang.org/protobuf v1.33.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
+
+// Direct-boot support - passing a kernel, an initrd and a command line to the
+// launch measurement computation, which the --kernel, --initrd and --append
+// flags of the snp scheme rely on - only exists in this fork. Upstream
+// LaunchDigestFromOVMF still takes no such arguments as of
+// v0.0.0-20260408174629. Drop this replace once the change is merged upstream.
+replace github.com/virtee/sev-snp-measure-go => github.com/THS-on/sev-snp-measure-go v0.0.0-20260216133113-5963a48054b5

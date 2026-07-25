@@ -64,12 +64,21 @@ func LoadLaunchConfig(fs afero.Fs, path string) (*LaunchConfig, error) {
 	return &config, nil
 }
 
+// directBoot describes a kernel the VM is booted with directly, rather than
+// through the firmware's own boot path. All three parts are optional, but they
+// change the launch measurement when present.
+type directBoot struct {
+	kernel  []byte
+	initrd  []byte
+	cmdline string
+}
+
 // launchDigests computes the launch measurement of the described VM for every
 // vCPU count from 1 to MaxVCPUs.
 //
 // The OVMF image is read by sev-snp-measure-go itself rather than through the
 // supplied filesystem, so it has to exist on the real one.
-func launchDigests(config *LaunchConfig, ovmfFile string) ([][]byte, error) {
+func launchDigests(config *LaunchConfig, ovmfFile string, boot *directBoot) ([][]byte, error) {
 	ovmfObj, err := ovmf.New(ovmfFile)
 	if err != nil {
 		return nil, fmt.Errorf("error loading OVMF from %s: %w", ovmfFile, err)
@@ -84,7 +93,8 @@ func launchDigests(config *LaunchConfig, ovmfFile string) ([][]byte, error) {
 
 	for vcpus := 1; vcpus <= config.MaxVCPUs; vcpus++ {
 		digest, err := guest.LaunchDigestFromOVMF(
-			ovmfObj, guestFeatures, vcpus, ovmfHash, vmmtypes.QEMU, config.CPUModel)
+			ovmfObj, guestFeatures, vcpus, ovmfHash, vmmtypes.QEMU, config.CPUModel,
+			boot.kernel, boot.initrd, boot.cmdline)
 		if err != nil {
 			return nil, fmt.Errorf("error computing the launch digest for %d vCPUs: %w", vcpus, err)
 		}

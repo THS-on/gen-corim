@@ -28,6 +28,9 @@ const ProfileURI = "tag:amd.com,2025:snp-corim-profile"
 type Scheme struct {
 	ovmfFile       string
 	launchConfFile string
+	kernelFile     string
+	initrdFile     string
+	cmdline        string
 	cspID          string
 }
 
@@ -70,6 +73,12 @@ func (o *Scheme) AddFlags(flags *pflag.FlagSet) {
 		"OVMF firmware image the VM boots, used to compute its launch measurement")
 	flags.StringVarP(&o.launchConfFile, "launch-config", "l", "",
 		"JSON file describing the VM the launch measurement is computed for")
+	flags.StringVar(&o.kernelFile, "kernel", "",
+		"kernel the VM is booted with directly, if any")
+	flags.StringVar(&o.initrdFile, "initrd", "",
+		"initrd the VM is booted with, if any")
+	flags.StringVar(&o.cmdline, "append", "",
+		"kernel command line the VM is booted with, if any")
 	flags.StringVar(&o.cspID, "csp-id", "",
 		"identifier of the cloud service provider, for reports signed by a CSP")
 }
@@ -137,7 +146,68 @@ func (o *Scheme) validFlags() error {
 				"measurements, or neither to use the one in the report")
 	}
 
+	// The direct boot parameters only take part in a computed launch
+	// measurement; they cannot retrofit themselves onto the report's own.
+	if o.ovmfFile == "" {
+		for _, tv := range []struct{ flag, value string }{
+			{"--kernel", o.kernelFile},
+			{"--initrd", o.initrdFile},
+			{"--append", o.cmdline},
+		} {
+			if tv.value != "" {
+				return fmt.Errorf(
+					"%s only applies when a launch measurement is computed, so it needs --ovmf and --launch-config",
+					tv.flag)
+			}
+		}
+
+		return nil
+	}
+
+	// An initrd and a command line are only measured as part of a directly
+	// booted kernel: sev-snp-measure-go keys the whole hashes table off the
+	// kernel being present, and would otherwise leave them out of the
+	// measurement without saying so.
+	if o.kernelFile == "" {
+		for _, tv := range []struct{ flag, value string }{
+			{"--initrd", o.initrdFile},
+			{"--append", o.cmdline},
+		} {
+			if tv.value != "" {
+				return fmt.Errorf(
+					"%s is only measured alongside a directly booted kernel, so it needs --kernel",
+					tv.flag)
+			}
+		}
+	}
+
 	return nil
+}
+
+func (o *Scheme) directBoot(fs afero.Fs) (*directBoot, error) {
+	boot := directBoot{cmdline: o.cmdline}
+
+	for _, tv := range []struct {
+		path string
+		into *[]byte
+		what string
+	}{
+		{o.kernelFile, &boot.kernel, "kernel"},
+		{o.initrdFile, &boot.initrd, "initrd"},
+	} {
+		if tv.path == "" {
+			continue
+		}
+
+		data, err := afero.ReadFile(fs, tv.path)
+		if err != nil {
+			return nil, fmt.Errorf("error loading %s from %s: %w", tv.what, tv.path, err)
+		}
+
+		*tv.into = data
+	}
+
+	return &boot, nil
 }
 
 // launchMeasurements returns the value of MKey 641 for each CoMID to generate.
@@ -151,5 +221,10 @@ func (o *Scheme) launchMeasurements(fs afero.Fs, report *sevsnp.Report) ([][]byt
 		return nil, err
 	}
 
-	return launchDigests(config, o.ovmfFile)
+	boot, err := o.directBoot(fs)
+	if err != nil {
+		return nil, err
+	}
+
+	return launchDigests(config, o.ovmfFile, boot)
 }

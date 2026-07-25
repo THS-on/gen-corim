@@ -96,6 +96,12 @@ and a single CoMID is generated - the report's own measurement already binds the
 vCPU count, CPU model and firmware of the machine that produced it, which is why
 no launch config is accepted in that mode.
 
+`--kernel`, `--initrd` and `--append` describe a directly booted kernel and only
+apply when the launch measurement is computed. They need firmware carrying an
+`SNP_KERNEL_HASHES` metadata section; firmware without one is an error rather
+than a measurement that quietly leaves the kernel out. `--initrd` and `--append`
+are only measured alongside a kernel, so they require `--kernel`.
+
 ## Developing
 
 ```sh

@@ -4,6 +4,7 @@
 package snp
 
 import (
+	"encoding/hex"
 	"flag"
 	"path/filepath"
 	"testing"
@@ -28,6 +29,20 @@ const (
 	testOVMF         = "../../data/snp/OVMF_CODE.cc.fd"
 	testLaunchConfig = "../../data/snp/launch-config.json"
 	testTemplate     = "../../data/templates/snp"
+
+	// Unlike testOVMF, this firmware carries an SNP_KERNEL_HASHES metadata
+	// section and so can measure a directly booted kernel. Its launch
+	// config matches the inputs of the reference digest below.
+	testDirectBootOVMF   = "../../data/snp/ovmf-amdsev-suffix.bin"
+	testDirectBootConfig = "../../data/snp/launch-config-amdsev.json"
+	testEmptyKernel      = "../../data/snp/empty-kernel.img"
+
+	// referenceLaunchDigest is the launch measurement sev-snp-measure.py
+	// produces for testDirectBootOVMF booting an empty kernel and initrd
+	// with "console=ttyS0 loglevel=7" on one EPYC-v4 vCPU under QEMU. See
+	// data/PROVENANCE.md.
+	referenceLaunchDigest = "6d287813eb5222d770f75005c664e34c204f385ce832cc2ce7d0d6f354454362" +
+		"f390ef83a92046c042e706363b4b08fa"
 
 	goldenDir = "../../data/golden"
 
@@ -341,12 +356,121 @@ func Test_Generate_errors(t *testing.T) {
 				"--ovmf=" + testOVMF, "--launch-config=" + testReport},
 			expected: "error decoding launch configuration from",
 		},
+		{
+			// the direct boot parameters change a computed launch
+			// measurement; they cannot be applied to the one already
+			// in the report
+			name:   "kernel without ovmf",
+			report: testReport,
+			args:   []string{"--kernel=" + testEmptyKernel},
+			expected: "--kernel only applies when a launch measurement is computed, " +
+				"so it needs --ovmf and --launch-config",
+		},
+		{
+			name:   "initrd without ovmf",
+			report: testReport,
+			args:   []string{"--initrd=" + testEmptyKernel},
+			expected: "--initrd only applies when a launch measurement is computed, " +
+				"so it needs --ovmf and --launch-config",
+		},
+		{
+			name:   "append without ovmf",
+			report: testReport,
+			args:   []string{"--append=console=ttyS0"},
+			expected: "--append only applies when a launch measurement is computed, " +
+				"so it needs --ovmf and --launch-config",
+		},
+		{
+			// an initrd or a command line without a kernel would be
+			// dropped from the measurement without a word, since the
+			// hashes table is keyed off the kernel
+			name:   "initrd without a kernel",
+			report: testReport,
+			args: []string{
+				"--ovmf=" + testDirectBootOVMF, "--launch-config=" + testDirectBootConfig,
+				"--initrd=" + testEmptyKernel},
+			expected: "--initrd is only measured alongside a directly booted kernel, " +
+				"so it needs --kernel",
+		},
+		{
+			name:   "append without a kernel",
+			report: testReport,
+			args: []string{
+				"--ovmf=" + testDirectBootOVMF, "--launch-config=" + testDirectBootConfig,
+				"--append=console=ttyS0"},
+			expected: "--append is only measured alongside a directly booted kernel, " +
+				"so it needs --kernel",
+		},
+		{
+			name:   "absent kernel",
+			report: testReport,
+			args: []string{
+				"--ovmf=" + testOVMF, "--launch-config=" + testLaunchConfig,
+				"--kernel=../../data/snp/absent.img"},
+			expected: "error loading kernel from ../../data/snp/absent.img",
+		},
+		{
+			name:   "absent initrd",
+			report: testReport,
+			args: []string{
+				"--ovmf=" + testOVMF, "--launch-config=" + testLaunchConfig,
+				"--kernel=" + testEmptyKernel, "--initrd=../../data/snp/absent.img"},
+			expected: "error loading initrd from ../../data/snp/absent.img",
+		},
+		{
+			// firmware without an SNP_KERNEL_HASHES section cannot
+			// measure a kernel, and has to say so rather than quietly
+			// producing a measurement that ignores it
+			name:   "firmware that cannot measure a kernel",
+			report: testReport,
+			args: []string{
+				"--ovmf=" + testOVMF, "--launch-config=" + testLaunchConfig,
+				"--kernel=" + testEmptyKernel, "--append=console=ttyS0"},
+			expected: "OVMF metadata doesn't include SNP_KERNEL_HASHES section",
+		},
 	} {
 		t.Run(tv.name, func(t *testing.T) {
 			_, err := generate(t, append([]string{tv.report}, tv.args...)...)
 			assert.ErrorContains(t, err, tv.expected)
 		})
 	}
+}
+
+// The launch measurement of a directly booted kernel, checked against the value
+// the reference implementation produces. sev-snp-measure-go's own test suite
+// derives this digest from sev-snp-measure.py for the same inputs, so matching
+// it shows that gen-corim drives the computation the way the reference tool
+// does - the guest features, VMM type and vCPU count it passes included.
+func Test_Generate_direct_boot_matches_the_reference_implementation(t *testing.T) {
+	payloads, err := generate(t, testReport,
+		"--ovmf="+testDirectBootOVMF, "--launch-config="+testDirectBootConfig,
+		"--kernel="+testEmptyKernel, "--initrd="+testEmptyKernel,
+		"--append=console=ttyS0 loglevel=7")
+	require.NoError(t, err)
+	require.Len(t, payloads[0].Comids, 1)
+
+	want, err := hex.DecodeString(referenceLaunchDigest)
+	require.NoError(t, err)
+
+	assert.Equal(t, want, launchMeasurementOf(t, payloads[0].Comids[0]))
+}
+
+// A kernel changes the launch measurement, which is the whole reason for passing
+// one. It is also the only case measuring a kernel without an initrd, which
+// --initrd being optional allows.
+func Test_Generate_kernel_without_an_initrd(t *testing.T) {
+	withoutKernel, err := generate(t, testReport,
+		"--ovmf="+testDirectBootOVMF, "--launch-config="+testDirectBootConfig)
+	require.NoError(t, err)
+
+	withKernel, err := generate(t, testReport,
+		"--ovmf="+testDirectBootOVMF, "--launch-config="+testDirectBootConfig,
+		"--kernel="+testEmptyKernel)
+	require.NoError(t, err)
+
+	assert.NotEqual(t,
+		launchMeasurementOf(t, withoutKernel[0].Comids[0]),
+		launchMeasurementOf(t, withKernel[0].Comids[0]))
 }
 
 func Test_Generate_golden(t *testing.T) {
