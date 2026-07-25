@@ -1,0 +1,54 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://veraison.github.io/gen-corim/schemes/snp/launch-config.schema.json",
+    "title": "SEV-SNP launch configuration",
+    "description": "The shape of the confidential VM whose launch measurements gen-corim computes. It cannot be derived from an attestation report, because the point of the exercise is to describe machines that have not run yet. Everything here takes part in the launch measurement, so a reference value only matches VMs launched the same way.",
+    "type": "object",
+    "required": [
+        "max-vcpus",
+        "cpu-model"
+    ],
+    "additionalProperties": false,
+    "properties": {
+        "$schema": {
+            "description": "Optional pointer to this schema, so that editors can validate the file.",
+            "type": "string"
+        },
+        "max-vcpus": {
+            "description": "The largest vCPU count to generate reference values for. A launch measurement depends on the vCPU count, so one is computed for every count from 1 up to this value.",
+            "type": "integer",
+            "minimum": 1,
+            "examples": [
+                4
+            ]
+        },
+        "cpu-model": {
+            "description": "The QEMU CPU model of the VM, which fixes the CPU family, model and stepping the initial vCPU state records.",
+            "type": "string",
+            "minLength": 1,
+            "examples": [
+                "EPYC-Milan-v2",
+                "EPYC-v4"
+            ]
+        },
+        "guest-features": {
+            "description": "The SEV_FEATURES bitfield the VM is launched with, as it appears in the initial VMSA: bit 0 is SNPActive, bit 5 DebugSwap. A hex bitmask, written as a string the way AMD's documentation and sev-snp-measure write it. Defaults to 0x1, SNPActive alone, which is what a VMM launches an SNP guest with unless told otherwise.",
+            "type": "string",
+            "pattern": "^0[xX][0-9a-fA-F]{1,16}$",
+            "default": "0x1",
+            "examples": [
+                "0x1",
+                "0x21"
+            ]
+        },
+        "vmm-type": {
+            "description": "The virtual machine monitor that starts the VM. It decides part of the initial vCPU state and when the CPUID page is measured, and so changes the launch measurement.",
+            "type": "string",
+            "enum": [
+                "qemu",
+                "ec2"
+            ],
+            "default": "qemu"
+        }
+    }
+}

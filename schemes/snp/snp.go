@@ -57,6 +57,19 @@ that have not been launched yet.
 	gen-corim snp report.bin --launch-config=launch.json \
 		--ovmf=OVMF_CODE.fd --template-dir=templates
 
+The launch configuration names the vCPU count and CPU model of the VM, and may
+name the guest features - a hex bitmask - and the virtual machine monitor it is
+launched with; they default to 0x1 and qemu. All take part in the measurement.
+Its format is described by schemes/snp/launch-config.schema.json, which every
+configuration is checked against.
+
+	{
+		"max-vcpus": 4,
+		"cpu-model": "EPYC-Milan-v2",
+		"guest-features": "0x21",
+		"vmm-type": "qemu"
+	}
+
 Given neither, the launch measurement is taken from the report as it stands and
 a single CoMID is generated. The report's own measurement already binds the
 vCPU count, CPU model and firmware of the machine that produced it, so no

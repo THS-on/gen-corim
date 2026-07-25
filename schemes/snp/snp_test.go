@@ -44,6 +44,15 @@ const (
 	referenceLaunchDigest = "6d287813eb5222d770f75005c664e34c204f385ce832cc2ce7d0d6f354454362" +
 		"f390ef83a92046c042e706363b4b08fa"
 
+	// The same firmware measured with guest features 0x21 rather than the
+	// default 0x1: the snp_features_0x21_with_cmdline and
+	// snp_4_vcpus_features_0x21 cases of guest/guest_test.go in
+	// THS-on/sev-snp-measure-go (5963a48).
+	referenceDigestFeatures0x21 = "803f691094946e42068aaa3a8f9e26a5c89f36f7b73ecfb28c653360fe4b3aba" +
+		"7e534442e7e1e17895dfe778d0228977"
+	referenceDigestFeatures0x21FourVCPUs = "4953b1fb416fa874980e8442b3706d345926d5f38879134e00813c5d7abcbe78" +
+		"eafe7b422907be0b4698e2414a631942"
+
 	goldenDir = "../../data/golden"
 
 	// the vCPU count in launch-config.json, and so the number of CoMIDs a
@@ -455,6 +464,69 @@ func Test_Generate_direct_boot_matches_the_reference_implementation(t *testing.T
 	assert.Equal(t, want, launchMeasurementOf(t, payloads[0].Comids[0]))
 }
 
+// Guest features other than the default reach the computation, checked against
+// the reference implementation as above. The second case has them apply to every
+// vCPU count rather than only to the first CoMID.
+func Test_Generate_guest_features_match_the_reference_implementation(t *testing.T) {
+	t.Run("one vCPU with a command line", func(t *testing.T) {
+		config := writeLaunchConfig(t,
+			`{"max-vcpus": 1, "cpu-model": "EPYC-v4", "guest-features": "0x21"}`)
+
+		payloads, err := generate(t, testReport,
+			"--ovmf="+testDirectBootOVMF, "--launch-config="+config,
+			"--kernel="+testEmptyKernel, "--initrd="+testEmptyKernel,
+			"--append=console=ttyS0 loglevel=7")
+		require.NoError(t, err)
+		require.Len(t, payloads[0].Comids, 1)
+
+		want, err := hex.DecodeString(referenceDigestFeatures0x21)
+		require.NoError(t, err)
+
+		assert.Equal(t, want, launchMeasurementOf(t, payloads[0].Comids[0]))
+	})
+
+	t.Run("four vCPUs", func(t *testing.T) {
+		config := writeLaunchConfig(t,
+			`{"max-vcpus": 4, "cpu-model": "EPYC-v4", "guest-features": "0x21"}`)
+
+		payloads, err := generate(t, testReport,
+			"--ovmf="+testDirectBootOVMF, "--launch-config="+config,
+			"--kernel="+testEmptyKernel, "--initrd="+testEmptyKernel)
+		require.NoError(t, err)
+		require.Len(t, payloads[0].Comids, 4)
+
+		want, err := hex.DecodeString(referenceDigestFeatures0x21FourVCPUs)
+		require.NoError(t, err)
+
+		// the reference digest is the four-vCPU one, so the last CoMID
+		assert.Equal(t, want, launchMeasurementOf(t, payloads[0].Comids[3]))
+	})
+}
+
+// Guest features and the VMM type are part of what is measured, so changing
+// either produces different reference values.
+func Test_Generate_launch_config_fields_change_the_measurement(t *testing.T) {
+	digestFor := func(t *testing.T, fields string) []byte {
+		t.Helper()
+
+		config := writeLaunchConfig(t, `{"max-vcpus": 1, "cpu-model": "EPYC-v4"`+fields+`}`)
+
+		payloads, err := generate(t, testReport,
+			"--ovmf="+testOVMF, "--launch-config="+config)
+		require.NoError(t, err)
+		require.Len(t, payloads[0].Comids, 1)
+
+		return launchMeasurementOf(t, payloads[0].Comids[0])
+	}
+
+	base := digestFor(t, "")
+
+	assert.Equal(t, base, digestFor(t, `, "guest-features": "0x1", "vmm-type": "qemu"`),
+		"the defaults are the values that were hard coded")
+	assert.NotEqual(t, base, digestFor(t, `, "guest-features": "0x21"`))
+	assert.NotEqual(t, base, digestFor(t, `, "vmm-type": "ec2"`))
+}
+
 // A kernel changes the launch measurement, which is the whole reason for passing
 // one. It is also the only case measuring a kernel without an initrd, which
 // --initrd being optional allows.
@@ -557,6 +629,11 @@ func Test_LaunchConfig_Valid(t *testing.T) {
 			name:     "no cpu model",
 			config:   LaunchConfig{MaxVCPUs: 4},
 			expected: "cpu-model not specified",
+		},
+		{
+			name:     "unknown vmm type",
+			config:   LaunchConfig{MaxVCPUs: 4, CPUModel: "EPYC-Milan-v2", VMMType: VMMType(7)},
+			expected: "unknown vmm-type VMMType(7), want one of ec2, qemu",
 		},
 	} {
 		t.Run(tv.name, func(t *testing.T) {
