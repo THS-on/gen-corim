@@ -41,7 +41,7 @@ func New(fs afero.Fs, opts *Options, name string) (*Generator, error) {
 		return nil, err
 	}
 
-	tmpl, err := loadTemplates(fs, opts.TemplateDir)
+	tmpl, err := loadTemplates(fs, opts.TemplateDir, opts.SigningKey != "")
 	if err != nil {
 		return nil, err
 	}
@@ -225,6 +225,10 @@ func (o *Generator) assemble(payload *scheme.Payload) (*corim.UnsignedCorim, err
 }
 
 func (o *Generator) encode(uc *corim.UnsignedCorim) ([]byte, error) {
+	if o.opts.SigningKey != "" {
+		return o.sign(uc)
+	}
+
 	if o.opts.Format == FormatJSON {
 		data, err := uc.ToJSON()
 		if err != nil {
@@ -237,6 +241,43 @@ func (o *Generator) encode(uc *corim.UnsignedCorim) ([]byte, error) {
 	data, err := uc.ToCBOR()
 	if err != nil {
 		return nil, fmt.Errorf("error encoding CoRIM to CBOR: %w", err)
+	}
+
+	return data, nil
+}
+
+func (o *Generator) sign(uc *corim.UnsignedCorim) ([]byte, error) {
+	// signing is the only thing the format constrains, so this is where the
+	// constraint is asserted rather than at the point of naming the file
+	if o.opts.Format != FormatCBOR {
+		return nil, errSignedJSON
+	}
+
+	var meta corim.Meta
+
+	if err := meta.FromJSON(o.tmpl.meta); err != nil {
+		return nil, fmt.Errorf("error decoding template %s: %w", MetaTemplateName, err)
+	}
+
+	if err := meta.Valid(); err != nil {
+		return nil, fmt.Errorf("error validating template %s: %w", MetaTemplateName, err)
+	}
+
+	keyJWK, err := afero.ReadFile(o.fs, o.opts.SigningKey)
+	if err != nil {
+		return nil, fmt.Errorf("error loading signing key from %s: %w", o.opts.SigningKey, err)
+	}
+
+	signer, err := corim.NewSignerFromJWK(keyJWK)
+	if err != nil {
+		return nil, fmt.Errorf("error loading signing key from %s: %w", o.opts.SigningKey, err)
+	}
+
+	sc := corim.SignedCorim{UnsignedCorim: *uc, Meta: meta}
+
+	data, err := sc.Sign(signer)
+	if err != nil {
+		return nil, fmt.Errorf("error signing CoRIM: %w", err)
 	}
 
 	return data, nil

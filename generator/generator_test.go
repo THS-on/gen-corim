@@ -96,6 +96,21 @@ func Test_New_missing_comid_template(t *testing.T) {
 	assert.ErrorContains(t, err, "error loading template templates/"+ComidTemplateName)
 }
 
+func Test_New_meta_template_only_needed_when_signing(t *testing.T) {
+	fs := afero.NewMemMapFs()
+	require.NoError(t, afero.WriteFile(fs, "templates/"+CorimTemplateName, testCorimTemplate, 0644))
+	require.NoError(t, afero.WriteFile(fs, "templates/"+ComidTemplateName, testComidTemplate, 0644))
+
+	_, err := New(fs, testOptions(), "test")
+	assert.NoError(t, err)
+
+	opts := testOptions()
+	opts.SigningKey = "key.json"
+
+	_, err = New(fs, opts, "test")
+	assert.ErrorContains(t, err, "error loading template templates/"+MetaTemplateName)
+}
+
 func Test_New_rejects_invalid_templates(t *testing.T) {
 	const generated = "ids are generated (see --seed and --id-prefix), so remove the field"
 	const profile = "the profile comes from the evidence, so remove the field"
@@ -402,6 +417,60 @@ func Test_Write_rejects_an_invalid_corim_as_json(t *testing.T) {
 	exists, err := afero.Exists(fs, "out/test-endorsements.json")
 	require.NoError(t, err)
 	assert.False(t, exists)
+}
+
+func Test_Write_signed(t *testing.T) {
+	fs := testFs(t)
+
+	opts := testOptions()
+	opts.SigningKey = "key.json"
+
+	g, err := New(fs, opts, "test")
+	require.NoError(t, err)
+
+	paths, err := g.Write([]scheme.Payload{newTestPayload(t, g, "")})
+	require.NoError(t, err)
+	require.Equal(t, []string{"out/test-endorsements.cbor"}, paths)
+
+	data, err := afero.ReadFile(fs, paths[0])
+	require.NoError(t, err)
+
+	var sc corim.SignedCorim
+	require.NoError(t, sc.FromCOSE(data))
+	assert.Equal(t, "ACME Ltd.", sc.Meta.Signer.Name)
+	assert.Equal(t, TestProfile, sc.UnsignedCorim.Profile.String())
+}
+
+func Test_Write_signed_missing_key(t *testing.T) {
+	fs := testFs(t)
+
+	opts := testOptions()
+	opts.SigningKey = "absent.json"
+
+	g, err := New(fs, opts, "test")
+	require.NoError(t, err)
+
+	_, err = g.Write([]scheme.Payload{newTestPayload(t, g, "")})
+	assert.ErrorContains(t, err, "error loading signing key from absent.json")
+}
+
+// New rejects the combination, so the guard in sign is only reachable by an
+// in-package caller assembling a Generator itself. It is what lets outputPath
+// take the format at face value.
+func Test_Write_signed_rejects_a_non_cbor_format(t *testing.T) {
+	fs := testFs(t)
+
+	opts := testOptions()
+	opts.SigningKey = "key.json"
+
+	g, err := New(fs, opts, "test")
+	require.NoError(t, err)
+
+	payload := newTestPayload(t, g, "")
+	g.opts.Format = FormatJSON
+
+	_, err = g.Write([]scheme.Payload{payload})
+	assert.ErrorIs(t, err, errSignedJSON)
 }
 
 func Test_Write_multiple_payloads(t *testing.T) {

@@ -17,15 +17,18 @@ import (
 const (
 	CorimTemplateName = "corim-template.json"
 	ComidTemplateName = "comid-template.json"
+	MetaTemplateName  = "meta-template.json"
 )
 
 type templates struct {
 	corim []byte
 	comid []byte
+	meta  []byte
 }
 
-// loadTemplates reads the templates from dir.
-func loadTemplates(fs afero.Fs, dir string) (*templates, error) {
+// loadTemplates reads the templates from dir. The CoRIM meta template is only
+// required, and only read, when the CoRIM is to be signed.
+func loadTemplates(fs afero.Fs, dir string, needMeta bool) (*templates, error) {
 	exists, err := afero.DirExists(fs, dir)
 	if err != nil {
 		return nil, fmt.Errorf("error accessing template directory %s: %w", dir, err)
@@ -43,6 +46,12 @@ func loadTemplates(fs afero.Fs, dir string) (*templates, error) {
 
 	if t.comid, err = readTemplate(fs, dir, ComidTemplateName); err != nil {
 		return nil, err
+	}
+
+	if needMeta {
+		if t.meta, err = readTemplate(fs, dir, MetaTemplateName); err != nil {
+			return nil, err
+		}
 	}
 
 	return &t, nil

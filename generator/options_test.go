@@ -33,6 +33,11 @@ func Test_Options_Valid(t *testing.T) {
 			opts:     Options{TemplateDir: "templates", Format: "diag"},
 			expected: `unsupported format "diag", want "cbor" or "json"`,
 		},
+		{
+			name:     "signed JSON",
+			opts:     Options{TemplateDir: "templates", Format: FormatJSON, SigningKey: "key.json"},
+			expected: "a signed CoRIM cannot be serialized as JSON",
+		},
 	} {
 		t.Run(tv.name, func(t *testing.T) {
 			err := tv.opts.Valid()
