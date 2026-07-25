@@ -4,6 +4,7 @@
 package generator
 
 import (
+	"crypto/x509"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -439,6 +440,155 @@ func Test_Write_signed(t *testing.T) {
 	require.NoError(t, sc.FromCOSE(data))
 	assert.Equal(t, "ACME Ltd.", sc.Meta.Signer.Name)
 	assert.Equal(t, TestProfile, sc.UnsignedCorim.Profile.String())
+}
+
+// signAndDecode signs a single payload with opts and reads the result back.
+func signAndDecode(t *testing.T, fs afero.Fs, opts *Options) *corim.SignedCorim {
+	t.Helper()
+
+	g, err := New(fs, opts, "test")
+	require.NoError(t, err)
+
+	paths, err := g.Write([]scheme.Payload{newTestPayload(t, g, "")})
+	require.NoError(t, err)
+
+	data, err := afero.ReadFile(fs, paths[0])
+	require.NoError(t, err)
+
+	var sc corim.SignedCorim
+	require.NoError(t, sc.FromCOSE(data))
+
+	return &sc
+}
+
+func Test_Write_signed_without_a_key_id(t *testing.T) {
+	opts := testOptions()
+	opts.SigningKey = "key.json"
+
+	sc := signAndDecode(t, testFs(t), opts)
+	assert.Nil(t, sc.KeyID)
+}
+
+func Test_Write_signed_key_id_from_the_jwk(t *testing.T) {
+	fs := testFs(t)
+	require.NoError(t, afero.WriteFile(fs, "key.json", []byte(`{
+    "kty": "EC",
+    "crv": "P-256",
+    "kid": "acme-signing-key",
+    "x": "MKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D4",
+    "y": "4Etl6SRW2YiLUrN5vfvVHuhp7x8PxltmWWlbbM4IFyM",
+    "d": "870MB6gfuTJ4HtUnUvYMyJpr5eUZNP4Bk43bVdj3eAE"
+}`), 0644))
+
+	opts := testOptions()
+	opts.SigningKey = "key.json"
+
+	sc := signAndDecode(t, fs, opts)
+	assert.Equal(t, []byte("acme-signing-key"), sc.KeyID)
+}
+
+func Test_Write_signed_with_a_signing_cert(t *testing.T) {
+	chain := newTestChain(t)
+
+	for _, tv := range []struct {
+		name  string
+		write func(*testing.T, afero.Fs, string, ...*x509.Certificate)
+	}{
+		{name: "DER", write: writeDER},
+		{name: "PEM", write: writePEM},
+	} {
+		t.Run(tv.name, func(t *testing.T) {
+			fs := testFs(t)
+			tv.write(t, fs, "cert", chain.leaf)
+
+			opts := testOptions()
+			opts.SigningKey = "key.json"
+			opts.SigningCert = "cert"
+
+			sc := signAndDecode(t, fs, opts)
+			assert.Equal(t, chain.leaf.Raw, sc.SigningCert.Raw)
+			assert.Empty(t, sc.IntermediateCerts)
+		})
+	}
+}
+
+func Test_Write_signed_with_a_cert_chain(t *testing.T) {
+	chain := newTestChain(t)
+
+	fs := testFs(t)
+	writePEM(t, fs, "cert", chain.leaf)
+	writeDER(t, fs, "intermediates", chain.intermediate, chain.root)
+
+	opts := testOptions()
+	opts.SigningKey = "key.json"
+	opts.SigningCert = "cert"
+	opts.IntermediateCerts = "intermediates"
+
+	sc := signAndDecode(t, fs, opts)
+	assert.Equal(t, chain.leaf.Raw, sc.SigningCert.Raw)
+	require.Len(t, sc.IntermediateCerts, 2)
+	assert.Equal(t, chain.intermediate.Raw, sc.IntermediateCerts[0].Raw)
+	assert.Equal(t, chain.root.Raw, sc.IntermediateCerts[1].Raw)
+
+	pool := x509.NewCertPool()
+	pool.AddCert(chain.root)
+	assert.NoError(t, sc.VerifyWithX5Chain(corim.TrustAnchors{Pool: pool}))
+}
+
+func Test_Write_signed_rejects_a_cert_for_another_key(t *testing.T) {
+	chain := newTestChain(t)
+
+	fs := testFs(t)
+	writeDER(t, fs, "cert", chain.other)
+
+	opts := testOptions()
+	opts.SigningKey = "key.json"
+	opts.SigningCert = "cert"
+
+	g, err := New(fs, opts, "test")
+	require.NoError(t, err)
+
+	_, err = g.Write([]scheme.Payload{newTestPayload(t, g, "")})
+	assert.EqualError(t, err, "the certificate in cert does not certify the signing key in key.json")
+}
+
+func Test_Write_signed_missing_certs(t *testing.T) {
+	chain := newTestChain(t)
+
+	for _, tv := range []struct {
+		name     string
+		set      func(*Options)
+		expected string
+	}{
+		{
+			name:     "signing cert",
+			set:      func(o *Options) { o.SigningCert = "absent" },
+			expected: "error loading certificate from absent",
+		},
+		{
+			name: "intermediates",
+			set: func(o *Options) {
+				o.SigningCert = "cert"
+				o.IntermediateCerts = "absent"
+			},
+			expected: "error loading certificates from absent",
+		},
+	} {
+		t.Run(tv.name, func(t *testing.T) {
+			fs := testFs(t)
+			writeDER(t, fs, "cert", chain.leaf)
+
+			opts := testOptions()
+			opts.SigningKey = "key.json"
+			tv.set(opts)
+
+			g, err := New(fs, opts, "test")
+			require.NoError(t, err)
+
+			_, err = g.Write([]scheme.Payload{newTestPayload(t, g, "")})
+			assert.ErrorContains(t, err, tv.expected)
+		})
+	}
 }
 
 func Test_Write_signed_missing_key(t *testing.T) {

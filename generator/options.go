@@ -40,6 +40,13 @@ type Options struct {
 	// SigningKey, when set, is the path of a JWK used to produce a signed
 	// CoRIM rather than an unsigned one.
 	SigningKey string
+	// SigningCert, when set, is the path of the X.509 certificate carrying
+	// the public half of SigningKey, embedded in the x5chain header of the
+	// signed CoRIM.
+	SigningCert string
+	// IntermediateCerts, when set, is the path of the certificates that
+	// complete the chain from SigningCert towards a trust anchor.
+	IntermediateCerts string
 }
 
 // Valid returns an error if the supplied options are inconsistent.
@@ -57,6 +64,16 @@ func (o *Options) Valid() error {
 	// serialization is defined.
 	if o.SigningKey != "" && o.Format == FormatJSON {
 		return errSignedJSON
+	}
+
+	if o.SigningCert != "" && o.SigningKey == "" {
+		return fmt.Errorf("a signing certificate is only meaningful with a signing key")
+	}
+
+	// The x5chain the intermediates belong to starts at the signing
+	// certificate, so there is nothing to attach them to without one.
+	if o.IntermediateCerts != "" && o.SigningCert == "" {
+		return fmt.Errorf("intermediate certificates are only meaningful with a signing certificate")
 	}
 
 	return nil

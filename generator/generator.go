@@ -7,6 +7,7 @@ package generator
 
 import (
 	"bytes"
+	"crypto"
 	"crypto/rand"
 	"crypto/sha256"
 	"fmt"
@@ -17,6 +18,7 @@ import (
 	"github.com/spf13/afero"
 	"github.com/veraison/corim/comid"
 	"github.com/veraison/corim/corim"
+	"github.com/veraison/gen-corim/keyutil"
 	"github.com/veraison/gen-corim/scheme"
 	"github.com/veraison/swid"
 )
@@ -275,10 +277,74 @@ func (o *Generator) sign(uc *corim.UnsignedCorim) ([]byte, error) {
 
 	sc := corim.SignedCorim{UnsignedCorim: *uc, Meta: meta}
 
+	kid, err := keyutil.KeyIDFromJWK(keyJWK)
+	if err != nil {
+		return nil, fmt.Errorf("error reading the key id from %s: %w", o.opts.SigningKey, err)
+	}
+
+	if kid != "" {
+		// The UTF-8 bytes of the JWK member rather than a decoding of it,
+		// which is how cocli writes it and how veraison reads it back.
+		sc.KeyID = []byte(kid)
+	}
+
+	if chainErr := o.addX5Chain(&sc, keyJWK); chainErr != nil {
+		return nil, chainErr
+	}
+
 	data, err := sc.Sign(signer)
 	if err != nil {
 		return nil, fmt.Errorf("error signing CoRIM: %w", err)
 	}
 
 	return data, nil
+}
+
+// addX5Chain populates the certificate chain of sc from the signing
+// certificate and the intermediates named in the options, keyJWK being the
+// signing key the certificate is expected to attest to.
+func (o *Generator) addX5Chain(sc *corim.SignedCorim, keyJWK []byte) error {
+	if o.opts.SigningCert == "" {
+		return nil
+	}
+
+	// The fields are set rather than AddSigningCert and AddIntermediateCerts
+	// called, since those take DER alone and keyutil accepts PEM too.
+	cert, err := keyutil.CertificateFromFile(o.fs, o.opts.SigningCert)
+	if err != nil {
+		return err
+	}
+
+	signingKey, err := keyutil.PublicKeyFromBytes(keyJWK)
+	if err != nil {
+		return fmt.Errorf("error loading signing key from %s: %w", o.opts.SigningKey, err)
+	}
+
+	// corim does not check this, and a chain that does not lead to the key the
+	// signature was made with produces a CoRIM no verifier can accept.
+	if !samePublicKey(cert.PublicKey, signingKey) {
+		return fmt.Errorf("the certificate in %s does not certify the signing key in %s",
+			o.opts.SigningCert, o.opts.SigningKey)
+	}
+
+	sc.SigningCert = cert
+
+	if o.opts.IntermediateCerts == "" {
+		return nil
+	}
+
+	certs, err := keyutil.CertificatesFromFile(o.fs, o.opts.IntermediateCerts)
+	if err != nil {
+		return err
+	}
+
+	sc.IntermediateCerts = certs
+
+	return nil
+}
+
+func samePublicKey(a, b crypto.PublicKey) bool {
+	equal, ok := a.(interface{ Equal(crypto.PublicKey) bool })
+
+	return ok && equal.Equal(b)
 }

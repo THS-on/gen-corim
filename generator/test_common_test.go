@@ -4,8 +4,18 @@
 package generator
 
 import (
+	"crypto"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
+	"math/big"
 	"testing"
+	"time"
 
+	"github.com/lestrrat-go/jwx/v2/jwk"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/require"
 	"github.com/veraison/corim/comid"
@@ -79,6 +89,111 @@ func testOptions() *Options {
 		OutputDir:   "out",
 		Format:      FormatCBOR,
 	}
+}
+
+// testChain is a certificate chain, the leaf of which certifies the public
+// half of testSigningKey.
+type testChain struct {
+	leaf         *x509.Certificate
+	intermediate *x509.Certificate
+	root         *x509.Certificate
+	// other is a leaf certifying a key that is not testSigningKey.
+	other *x509.Certificate
+}
+
+// newTestChain issues root -> intermediate -> leaf, the leaf carrying the
+// public half of testSigningKey so that it matches the CoRIM signature.
+func newTestChain(t *testing.T) *testChain {
+	t.Helper()
+
+	var signingKey ecdsa.PrivateKey
+	require.NoError(t, jwk.ParseRawKey(testSigningKey, &signingKey))
+
+	rootKey := newTestKey(t)
+	intermediateKey := newTestKey(t)
+
+	root := issue(t, "root", true, rootKey.Public(), rootKey, nil)
+	intermediate := issue(t, "intermediate", true, intermediateKey.Public(), rootKey, root)
+
+	return &testChain{
+		leaf:         issue(t, "leaf", false, signingKey.Public(), intermediateKey, intermediate),
+		intermediate: intermediate,
+		root:         root,
+		other:        issue(t, "other", false, newTestKey(t).Public(), intermediateKey, intermediate),
+	}
+}
+
+func newTestKey(t *testing.T) *ecdsa.PrivateKey {
+	t.Helper()
+
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+
+	return key
+}
+
+// issue creates a certificate for pub, signed by issuerKey. A nil parent makes
+// it self-signed.
+func issue(
+	t *testing.T,
+	cn string,
+	isCA bool,
+	pub crypto.PublicKey,
+	issuerKey *ecdsa.PrivateKey,
+	parent *x509.Certificate,
+) *x509.Certificate {
+	t.Helper()
+
+	keyUsage := x509.KeyUsageDigitalSignature
+	if isCA {
+		keyUsage |= x509.KeyUsageCertSign
+	}
+
+	tmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: cn},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		IsCA:                  isCA,
+		KeyUsage:              keyUsage,
+		BasicConstraintsValid: true,
+	}
+
+	if parent == nil {
+		parent = tmpl
+	}
+
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, parent, pub, issuerKey)
+	require.NoError(t, err)
+
+	cert, err := x509.ParseCertificate(der)
+	require.NoError(t, err)
+
+	return cert
+}
+
+// writeDER writes the concatenated DER of the supplied certificates to path.
+func writeDER(t *testing.T, fs afero.Fs, path string, certs ...*x509.Certificate) {
+	t.Helper()
+
+	var der []byte
+	for _, cert := range certs {
+		der = append(der, cert.Raw...)
+	}
+
+	require.NoError(t, afero.WriteFile(fs, path, der, 0644))
+}
+
+// writePEM writes the supplied certificates to path as concatenated PEM blocks.
+func writePEM(t *testing.T, fs afero.Fs, path string, certs ...*x509.Certificate) {
+	t.Helper()
+
+	var buf []byte
+	for _, cert := range certs {
+		buf = append(buf, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw})...)
+	}
+
+	require.NoError(t, afero.WriteFile(fs, path, buf, 0644))
 }
 
 // addTestRefVal populates m with a minimal, valid reference value.

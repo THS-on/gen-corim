@@ -38,6 +38,31 @@ func Test_Options_Valid(t *testing.T) {
 			opts:     Options{TemplateDir: "templates", Format: FormatJSON, SigningKey: "key.json"},
 			expected: "a signed CoRIM cannot be serialized as JSON",
 		},
+		{
+			name:     "cert without a key",
+			opts:     Options{TemplateDir: "templates", Format: FormatCBOR, SigningCert: "cert.der"},
+			expected: "a signing certificate is only meaningful with a signing key",
+		},
+		{
+			name: "intermediates without a cert",
+			opts: Options{
+				TemplateDir:       "templates",
+				Format:            FormatCBOR,
+				SigningKey:        "key.json",
+				IntermediateCerts: "chain.der",
+			},
+			expected: "intermediate certificates are only meaningful with a signing certificate",
+		},
+		{
+			name: "signed with a full chain",
+			opts: Options{
+				TemplateDir:       "templates",
+				Format:            FormatCBOR,
+				SigningKey:        "key.json",
+				SigningCert:       "cert.der",
+				IntermediateCerts: "chain.der",
+			},
+		},
 	} {
 		t.Run(tv.name, func(t *testing.T) {
 			err := tv.opts.Valid()
