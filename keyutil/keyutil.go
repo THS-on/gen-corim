@@ -53,6 +53,36 @@ func PublicKeyFromBytes(data []byte) (crypto.PublicKey, error) {
 	return x509.ParsePKIXPublicKey(data)
 }
 
+// CertificateFromFile loads an X.509 certificate from the named file, which may
+// hold either PEM or raw DER.
+func CertificateFromFile(fs afero.Fs, path string) (*x509.Certificate, error) {
+	data, err := afero.ReadFile(fs, path)
+	if err != nil {
+		return nil, fmt.Errorf("error loading certificate from %s: %w", path, err)
+	}
+
+	if bytes.Contains(data, []byte("-----BEGIN ")) {
+		block, _ := pem.Decode(data)
+		if block == nil {
+			return nil, fmt.Errorf("error loading certificate from %s: no PEM block found", path)
+		}
+
+		if block.Type != "CERTIFICATE" {
+			return nil, fmt.Errorf(
+				"error loading certificate from %s: unsupported PEM block type %q", path, block.Type)
+		}
+
+		data = block.Bytes
+	}
+
+	cert, err := x509.ParseCertificate(data)
+	if err != nil {
+		return nil, fmt.Errorf("error loading certificate from %s: %w", path, err)
+	}
+
+	return cert, nil
+}
+
 // PKIXBase64Key converts a public key into the tagged-pkix-base64-key-type
 // CryptoKey used by the attestation verification key triples.
 func PKIXBase64Key(pk crypto.PublicKey) (*comid.CryptoKey, error) {

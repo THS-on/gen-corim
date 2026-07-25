@@ -182,6 +182,73 @@ func Test_PublicKeyFromBytes_errors(t *testing.T) {
 	}
 }
 
+// Both encodings a certificate is handed out in must load to the same one.
+func Test_CertificateFromFile(t *testing.T) {
+	cert, der := testCertificate(t)
+
+	for _, tv := range []struct {
+		name string
+		data []byte
+	}{
+		{"der", der},
+		{"pem", pemBlock(t, "CERTIFICATE", der)},
+	} {
+		t.Run(tv.name, func(t *testing.T) {
+			fs := afero.NewMemMapFs()
+			require.NoError(t, afero.WriteFile(fs, "cert", tv.data, 0644))
+
+			loaded, err := CertificateFromFile(fs, "cert")
+			require.NoError(t, err)
+			assert.True(t, loaded.Equal(cert))
+		})
+	}
+}
+
+func Test_CertificateFromFile_errors(t *testing.T) {
+	pk, err := x509.MarshalPKIXPublicKey(privateKeyFromJWK(t, testPrivateJWK).Public())
+	require.NoError(t, err)
+
+	for _, tv := range []struct {
+		name string
+		// data is written to the file under test, unless it is nil.
+		data     []byte
+		expected string
+	}{
+		{
+			name:     "absent",
+			expected: "error loading certificate from cert",
+		},
+		{
+			name:     "no PEM block",
+			data:     []byte("-----BEGIN CERTIFICATE-----\nnot base64\n"),
+			expected: "error loading certificate from cert: no PEM block found",
+		},
+		{
+			// a public key is not a certificate, and has to be
+			// reported as such rather than silently misread
+			name:     "public key",
+			data:     pemBlock(t, "PUBLIC KEY", pk),
+			expected: `unsupported PEM block type "PUBLIC KEY"`,
+		},
+		{
+			name:     "not a certificate",
+			data:     []byte{1, 2, 3, 4},
+			expected: "error loading certificate from cert",
+		},
+	} {
+		t.Run(tv.name, func(t *testing.T) {
+			fs := afero.NewMemMapFs()
+
+			if tv.data != nil {
+				require.NoError(t, afero.WriteFile(fs, "cert", tv.data, 0644))
+			}
+
+			_, err := CertificateFromFile(fs, "cert")
+			assert.ErrorContains(t, err, tv.expected)
+		})
+	}
+}
+
 func Test_PKIXBase64Key(t *testing.T) {
 	pk, err := PublicKeyFromFile(osFs(), testPrivateJWK)
 	require.NoError(t, err)
