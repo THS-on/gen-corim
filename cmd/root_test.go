@@ -39,6 +39,7 @@ func Test_RootCmd_help(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, out, "Generate a CoRIM from an attestation token or platform report.")
 	assert.Contains(t, out, "--template-dir")
+	assert.Contains(t, out, "--signing-key")
 	assert.Contains(t, out, "generate a test CoRIM")
 
 	// the scheme binds its own flags, and documents itself
@@ -86,6 +87,18 @@ func Test_SchemeCmd_generates(t *testing.T) {
 				var uc corim.UnsignedCorim
 				require.NoError(t, uc.FromJSON(data))
 				assert.Equal(t, testProfile, uc.Profile.String())
+			},
+		},
+		{
+			name: "signed",
+			args: []string{"--output-dir=out", "--signing-key=" + testSigningKey},
+			path: "out/test-endorsements.cbor",
+			verify: func(t *testing.T, data []byte) {
+				t.Helper()
+
+				var sc corim.SignedCorim
+				require.NoError(t, sc.FromCOSE(data))
+				assert.Equal(t, "ACME Ltd.", sc.Meta.Signer.Name)
 			},
 		},
 		{
@@ -169,6 +182,15 @@ func Test_SchemeCmd_errors(t *testing.T) {
 			factory:  newFailingTestScheme,
 			args:     []string{"test", "evidence.cbor", "--template-dir=templates"},
 			expected: "error reading the evidence",
+		},
+		{
+			// not a flag group either: --format takes a value, so the
+			// combination is only visible to Options.Valid
+			name:    "signed JSON",
+			factory: newTestScheme,
+			args: []string{"test", "evidence.cbor", "--template-dir=templates",
+				"--signing-key=" + testSigningKey, "--format=json"},
+			expected: "a signed CoRIM cannot be serialized as JSON",
 		},
 		{
 			// not a flag group: how many CoRIMs a run produces is

@@ -55,6 +55,8 @@ unless --seed is given.
 		"seed the generated ids are derived from, making unsigned output reproducible; random if unset")
 	flags.StringVar(&opts.IDPrefix, "id-prefix", "",
 		"prefix turning the generated ids from UUIDs into strings of the prefix followed by a UUID")
+	flags.StringVar(&opts.SigningKey, "signing-key", "",
+		"JWK used to sign the generated CoRIM; if unset, an unsigned CoRIM is produced")
 
 	// --corim-file is the full output path, so it has no use for a directory.
 	cmd.MarkFlagsMutuallyExclusive("output-dir", "corim-file")

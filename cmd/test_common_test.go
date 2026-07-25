@@ -112,7 +112,25 @@ var (
 	testComidTemplate = []byte(`{
     "lang": "en-GB"
 }`)
+
+	testMetaTemplate = []byte(`{
+    "signer": {
+        "name": "ACME Ltd.",
+        "uri": "https://acme.example"
+    }
+}`)
+
+	testSigningKeyJWK = []byte(`{
+    "kty": "EC",
+    "crv": "P-256",
+    "x": "MKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D4",
+    "y": "4Etl6SRW2YiLUrN5vfvVHuhp7x8PxltmWWlbbM4IFyM",
+    "d": "870MB6gfuTJ4HtUnUvYMyJpr5eUZNP4Bk43bVdj3eAE"
+}`)
 )
+
+// testSigningKey is where testFs writes the signing key.
+const testSigningKey = "key.json"
 
 // testFs returns an in-memory filesystem holding a template directory and a
 // stand-in evidence file.
@@ -125,6 +143,9 @@ func testFs(t *testing.T) afero.Fs {
 		"templates/"+generator.CorimTemplateName, testCorimTemplate, 0644))
 	require.NoError(t, afero.WriteFile(fs,
 		"templates/"+generator.ComidTemplateName, testComidTemplate, 0644))
+	require.NoError(t, afero.WriteFile(fs,
+		"templates/"+generator.MetaTemplateName, testMetaTemplate, 0644))
+	require.NoError(t, afero.WriteFile(fs, testSigningKey, testSigningKeyJWK, 0644))
 	require.NoError(t, afero.WriteFile(fs, "evidence.cbor", []byte("evidence"), 0644))
 
 	return fs
