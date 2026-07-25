@@ -37,6 +37,17 @@ whole path, so passing both is an error rather than one of them being ignored.
 
 Supported schemes are documented below as they are added.
 
+### psa
+
+```sh
+gen-corim psa token.cbor --template-dir=data/templates/psa
+```
+
+Generates PSA endorsements under the `tag:arm.com,2025:psa#1.0.0` profile. The
+software components of the token become the reference values - one measurement
+each, keyed `psa.software-component`, carrying the component digest and its
+signer ID.
+
 ## Developing
 
 ```sh

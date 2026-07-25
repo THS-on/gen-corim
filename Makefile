@@ -35,6 +35,13 @@ test:
 test-cover:
 	go test -cover $(GOPKG)
 
+.PHONY: regen-testdata
+# Only the scheme packages carry golden files, and so define -update. go test
+# forwards the flag to every binary it builds, and one that does not define it
+# fails to parse it, which is why this cannot use $(GOPKG).
+regen-testdata:
+	go test ./schemes/... -update
+
 .PHONY: presubmit
 presubmit: test-cover lint
 
@@ -44,6 +51,7 @@ help:
 	@echo "  * build:          build gen-corim"
 	@echo "  * test:           run unit tests"
 	@echo "  * test-cover:     run unit tests and measure coverage"
+	@echo "  * regen-testdata: regenerate the golden CoRIMs under data/"
 	@echo "  * lint:           lint sources using default configuration and some extra checkers"
 	@echo "  * presubmit:      check you are ready to push your local branch to remote"
 	@echo "  * help:           print this menu"

@@ -33,6 +33,8 @@ linters:
           - funlen
           - lll
           - goconst
+          # test vector paths trip the G101 hardcoded-credentials heuristic
+          - gosec
   settings:
     dupl:
       threshold: 100
@@ -77,6 +79,8 @@ issues:
         - dupl
         - gomnd
         - lll
+        # test vector paths trip the G101 hardcoded-credentials heuristic
+        - gosec
     - path: doc\.go
       linters:
         - goimports

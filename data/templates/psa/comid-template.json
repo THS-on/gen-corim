@@ -1,0 +1,14 @@
+{
+    "lang": "en-GB",
+    "entities": [
+        {
+            "name": "ACME Ltd.",
+            "regid": "https://acme.example",
+            "roles": [
+                "tagCreator",
+                "creator",
+                "maintainer"
+            ]
+        }
+    ]
+}
