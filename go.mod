@@ -36,7 +36,8 @@ require (
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/segmentio/asm v1.2.0 // indirect
 	github.com/spf13/cast v1.4.1 // indirect
-	github.com/veraison/eat v0.0.0-20210331113810-3da8a4dd42ff // indirect
+	github.com/veraison/ccatoken v1.4.0 // indirect
+	github.com/veraison/eat v0.0.0-20220117140849-ddaf59d69f53 // indirect
 	github.com/veraison/go-cose v1.3.0 // indirect
 	github.com/veraison/psatoken v1.2.1-0.20251211083527-a6e46122bbca // indirect
 	github.com/x448/float16 v0.8.4 // indirect

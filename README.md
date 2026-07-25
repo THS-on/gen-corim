@@ -48,6 +48,20 @@ software components of the token become the reference values - one measurement
 each, keyed `psa.software-component`, carrying the component digest and its
 signer ID.
 
+### cca
+
+```sh
+gen-corim cca token.cbor --template-dir=data/templates/cca
+```
+
+A CCA token describes two target environments, the platform and the realm, and
+each has a CoRIM profile of its own - so this emits two files rather than one.
+`--part=platform` or `--part=realm` generates just one of them.
+
+The platform CoRIM, under `tag:arm.com,2025:cca_platform#1.0.0`, carries one
+`cca.software-component` measurement per software component and a single
+`cca.platform-config` measurement holding the platform configuration.
+
 ## Developing
 
 ```sh
