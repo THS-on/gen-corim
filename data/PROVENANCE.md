@@ -18,6 +18,7 @@ updates this file in the same commit.
 | `cca/cca-evidence.cbor` | [veraison/gen-corim](https://github.com/veraison/gen-corim) | `data/corims/cca-evidence.cbor` | `519630a` | Apache-2.0 |
 | `cca/tf-rmm/cca_token.cbor` | [veraison/ccatoken](https://github.com/veraison/ccatoken) | `realm/testvectors/tf-rmm/cca_token.cbor` | `cfb829e` | Apache-2.0 |
 | `cca/tf-rmm/cca_platform.pub` | [veraison/ccatoken](https://github.com/veraison/ccatoken) | `realm/testvectors/tf-rmm/cca_platform.pub` | `cfb829e` | Apache-2.0 |
+| `snp/report.bin` | [jraman567/go-gen-ref](https://github.com/jraman567/go-gen-ref) | `sample/sevsnp/report.bin` | `c942092` | Apache-2.0 |
 
 ## Derived
 

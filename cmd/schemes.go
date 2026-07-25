@@ -7,6 +7,7 @@ import (
 	"github.com/veraison/gen-corim/scheme"
 	"github.com/veraison/gen-corim/schemes/cca"
 	"github.com/veraison/gen-corim/schemes/psa"
+	"github.com/veraison/gen-corim/schemes/snp"
 )
 
 // DefaultSchemes lists the attestation schemes gen-corim supports. Adding a
@@ -14,4 +15,5 @@ import (
 var DefaultSchemes = []scheme.Factory{
 	psa.New,
 	cca.New,
+	snp.New,
 }

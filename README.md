@@ -68,6 +68,20 @@ extensible registers, and `cca.rpv` when the realm was given a personalization
 value. A realm is identified by its measurements rather than by a key, so it has
 no attestation verification key triple.
 
+### snp
+
+```sh
+gen-corim snp report.bin --template-dir=data/templates/snp
+```
+
+Generates AMD SEV-SNP reference values under the
+`tag:amd.com,2025:snp-corim-profile` profile, superseding
+[go-gen-ref](https://github.com/jraman567/go-gen-ref).
+
+The launch measurement is taken from the report as it stands, so the reference
+values describe the machine the report came from - its own measurement already
+binds the vCPU count, CPU model and firmware of that machine.
+
 ## Developing
 
 ```sh
