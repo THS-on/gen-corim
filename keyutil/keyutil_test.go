@@ -6,6 +6,7 @@ package keyutil
 import (
 	"bytes"
 	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -247,6 +248,121 @@ func Test_CertificateFromFile_errors(t *testing.T) {
 			assert.ErrorContains(t, err, tv.expected)
 		})
 	}
+}
+
+// selfSigned returns a self-signed certificate over a fresh key, so that a
+// chain can be built out of certificates that are told apart.
+func selfSigned(t *testing.T, cn string) (cert *x509.Certificate, der []byte) {
+	t.Helper()
+
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: cn},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+	}
+
+	der, err = x509.CreateCertificate(rand.Reader, template, template, key.Public(), key)
+	require.NoError(t, err)
+
+	cert, err = x509.ParseCertificate(der)
+	require.NoError(t, err)
+
+	return cert, der
+}
+
+// A chain is concatenated in either encoding, and both have to load to the
+// same certificates in the same order - the order being what makes it a chain.
+func Test_CertificatesFromFile(t *testing.T) {
+	first, firstDER := selfSigned(t, "first")
+	second, secondDER := selfSigned(t, "second")
+
+	for _, tv := range []struct {
+		name string
+		data []byte
+	}{
+		{"der", append(append([]byte{}, firstDER...), secondDER...)},
+		{"pem", append(pemBlock(t, "CERTIFICATE", firstDER), pemBlock(t, "CERTIFICATE", secondDER)...)},
+	} {
+		t.Run(tv.name, func(t *testing.T) {
+			fs := afero.NewMemMapFs()
+			require.NoError(t, afero.WriteFile(fs, "certs", tv.data, 0644))
+
+			loaded, err := CertificatesFromFile(fs, "certs")
+			require.NoError(t, err)
+			require.Len(t, loaded, 2)
+			assert.True(t, loaded[0].Equal(first))
+			assert.True(t, loaded[1].Equal(second))
+		})
+	}
+}
+
+func Test_CertificatesFromFile_errors(t *testing.T) {
+	_, der := selfSigned(t, "first")
+
+	for _, tv := range []struct {
+		name string
+		// data is written to the file under test, unless it is nil.
+		data     []byte
+		expected string
+	}{
+		{
+			name:     "absent",
+			expected: "error loading certificates from certs",
+		},
+		{
+			name:     "empty",
+			data:     []byte{},
+			expected: "error loading certificates from certs: no certificate found",
+		},
+		{
+			// one good block followed by one that is not a certificate
+			// must fail rather than load the prefix
+			name:     "mixed PEM",
+			data:     append(pemBlock(t, "CERTIFICATE", der), pemBlock(t, "PUBLIC KEY", der)...),
+			expected: `unsupported PEM block type "PUBLIC KEY"`,
+		},
+		{
+			name:     "trailing garbage",
+			data:     append(append([]byte{}, der...), 1, 2, 3, 4),
+			expected: "error loading certificates from certs",
+		},
+	} {
+		t.Run(tv.name, func(t *testing.T) {
+			fs := afero.NewMemMapFs()
+
+			if tv.data != nil {
+				require.NoError(t, afero.WriteFile(fs, "certs", tv.data, 0644))
+			}
+
+			_, err := CertificatesFromFile(fs, "certs")
+			assert.ErrorContains(t, err, tv.expected)
+		})
+	}
+}
+
+func Test_KeyIDFromJWK(t *testing.T) {
+	withKid, err := afero.ReadFile(osFs(), testPrivateJWK)
+	require.NoError(t, err)
+
+	withKid = append([]byte(`{"kid": "acme-signing-key",`), withKid[1:]...)
+
+	kid, err := KeyIDFromJWK(withKid)
+	require.NoError(t, err)
+	assert.Equal(t, "acme-signing-key", kid)
+
+	withoutKid, err := afero.ReadFile(osFs(), testPrivateJWK)
+	require.NoError(t, err)
+
+	kid, err = KeyIDFromJWK(withoutKid)
+	require.NoError(t, err)
+	assert.Empty(t, kid)
+
+	_, err = KeyIDFromJWK([]byte("not a JWK"))
+	assert.Error(t, err)
 }
 
 func Test_PKIXBase64Key(t *testing.T) {

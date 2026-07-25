@@ -18,6 +18,8 @@ import (
 	"github.com/veraison/corim/comid"
 )
 
+const certPEMBlock = "CERTIFICATE"
+
 // PublicKeyFromFile loads a public key from the named file, which may hold a
 // JSON Web Key, PEM-encoded data or a raw DER PKIX public key.
 func PublicKeyFromFile(fs afero.Fs, path string) (crypto.PublicKey, error) {
@@ -61,26 +63,68 @@ func CertificateFromFile(fs afero.Fs, path string) (*x509.Certificate, error) {
 		return nil, fmt.Errorf("error loading certificate from %s: %w", path, err)
 	}
 
-	if bytes.Contains(data, []byte("-----BEGIN ")) {
-		block, _ := pem.Decode(data)
-		if block == nil {
-			return nil, fmt.Errorf("error loading certificate from %s: no PEM block found", path)
-		}
-
-		if block.Type != "CERTIFICATE" {
-			return nil, fmt.Errorf(
-				"error loading certificate from %s: unsupported PEM block type %q", path, block.Type)
-		}
-
-		data = block.Bytes
-	}
-
-	cert, err := x509.ParseCertificate(data)
+	cert, err := CertificateFromBytes(data)
 	if err != nil {
 		return nil, fmt.Errorf("error loading certificate from %s: %w", path, err)
 	}
 
 	return cert, nil
+}
+
+// CertificateFromBytes parses an X.509 certificate from the supplied PEM or raw
+// DER data.
+func CertificateFromBytes(data []byte) (*x509.Certificate, error) {
+	if bytes.Contains(data, []byte("-----BEGIN ")) {
+		block, _ := pem.Decode(data)
+		if block == nil {
+			return nil, fmt.Errorf("no PEM block found")
+		}
+
+		if block.Type != certPEMBlock {
+			return nil, fmt.Errorf("unsupported PEM block type %q", block.Type)
+		}
+
+		data = block.Bytes
+	}
+
+	return x509.ParseCertificate(data)
+}
+
+// CertificatesFromFile loads a chain of X.509 certificates from the named file,
+// which may hold either concatenated PEM blocks or concatenated raw DER.
+func CertificatesFromFile(fs afero.Fs, path string) ([]*x509.Certificate, error) {
+	data, err := afero.ReadFile(fs, path)
+	if err != nil {
+		return nil, fmt.Errorf("error loading certificates from %s: %w", path, err)
+	}
+
+	if bytes.Contains(data, []byte("-----BEGIN ")) {
+		if data, err = certDERFromPEM(data); err != nil {
+			return nil, fmt.Errorf("error loading certificates from %s: %w", path, err)
+		}
+	}
+
+	certs, err := x509.ParseCertificates(data)
+	if err != nil {
+		return nil, fmt.Errorf("error loading certificates from %s: %w", path, err)
+	}
+
+	if len(certs) == 0 {
+		return nil, fmt.Errorf("error loading certificates from %s: no certificate found", path)
+	}
+
+	return certs, nil
+}
+
+// KeyIDFromJWK returns the kid of the supplied JSON Web Key, or the empty
+// string if it carries none.
+func KeyIDFromJWK(data []byte) (string, error) {
+	key, err := jwk.ParseKey(data)
+	if err != nil {
+		return "", err
+	}
+
+	return key.KeyID(), nil
 }
 
 // PKIXBase64Key converts a public key into the tagged-pkix-base64-key-type
@@ -105,6 +149,30 @@ func PKIXBase64Key(pk crypto.PublicKey) (*comid.CryptoKey, error) {
 	return key, nil
 }
 
+// certDERFromPEM concatenates the bodies of the CERTIFICATE blocks in data, so
+// that a PEM bundle can be parsed by the same call as a DER one.
+func certDERFromPEM(data []byte) ([]byte, error) {
+	var der []byte
+
+	rest := data
+
+	for len(bytes.TrimSpace(rest)) > 0 {
+		var block *pem.Block
+
+		if block, rest = pem.Decode(rest); block == nil {
+			return nil, fmt.Errorf("no PEM block found")
+		}
+
+		if block.Type != certPEMBlock {
+			return nil, fmt.Errorf("unsupported PEM block type %q", block.Type)
+		}
+
+		der = append(der, block.Bytes...)
+	}
+
+	return der, nil
+}
+
 func publicKeyFromJWK(data []byte) (crypto.PublicKey, error) {
 	var key any
 
@@ -124,7 +192,7 @@ func publicKeyFromPEM(data []byte) (crypto.PublicKey, error) {
 	switch block.Type {
 	case "PUBLIC KEY":
 		return x509.ParsePKIXPublicKey(block.Bytes)
-	case "CERTIFICATE":
+	case certPEMBlock:
 		cert, err := x509.ParseCertificate(block.Bytes)
 		if err != nil {
 			return nil, err
