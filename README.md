@@ -62,6 +62,12 @@ The platform CoRIM, under `tag:arm.com,2025:cca_platform#1.0.0`, carries one
 `cca.software-component` measurement per software component and a single
 `cca.platform-config` measurement holding the platform configuration.
 
+The realm CoRIM, under `tag:arm.com,2025:cca_realm#1.0.0`, is identified by the
+realm initial measurement and carries `cca.rim`, the four `cca.rem0`-`cca.rem3`
+extensible registers, and `cca.rpv` when the realm was given a personalization
+value. A realm is identified by its measurements rather than by a key, so it has
+no attestation verification key triple.
+
 ## Developing
 
 ```sh

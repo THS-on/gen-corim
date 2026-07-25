@@ -15,6 +15,7 @@ import (
 	genpsa "github.com/veraison/gen-corim/schemes/psa"
 )
 
+//nolint:dupl // the same shape as realmPayload, over a different profile and claims
 func platformPayload(b scheme.ComidBuilder, evidence *ccatoken.Evidence) (*scheme.Payload, error) {
 	// never nil: ccatoken.Evidence.Validate makes both claim sets mandatory
 	claims := evidence.PlatformClaims

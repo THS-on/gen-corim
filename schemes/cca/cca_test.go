@@ -82,6 +82,41 @@ func platformOf(t *testing.T, payloads []scheme.Payload) *comid.Comid {
 	return nil
 }
 
+// realmOf returns the realm CoMID of the generated payloads.
+func realmOf(t *testing.T, payloads []scheme.Payload) *comid.Comid {
+	t.Helper()
+
+	for _, payload := range payloads {
+		if payload.Label == PartRealm {
+			require.Len(t, payload.Comids, 1)
+			return payload.Comids[0]
+		}
+	}
+
+	t.Fatal("no realm payload generated")
+
+	return nil
+}
+
+// measurementKeys returns the measurement keys of the CoMID's single reference
+// value, in order.
+func measurementKeys(t *testing.T, m *comid.Comid) []string {
+	t.Helper()
+
+	require.NotNil(t, m.Triples.ReferenceValues)
+	require.Len(t, m.Triples.ReferenceValues.Values, 1)
+
+	values := m.Triples.ReferenceValues.Values[0].Measurements.Values
+	keys := make([]string, 0, len(values))
+
+	for i := range values {
+		require.NotNil(t, values[i].Key)
+		keys = append(keys, values[i].Key.Value.String())
+	}
+
+	return keys
+}
+
 func Test_Generate_platform(t *testing.T) {
 	payloads, err := generate(t, tfRmmToken, "--part="+PartPlatform)
 	require.NoError(t, err)
@@ -130,6 +165,64 @@ func Test_Generate_platform(t *testing.T) {
 	assert.Equal(t, 1, config)
 }
 
+func Test_Generate_realm(t *testing.T) {
+	payloads, err := generate(t, tfRmmToken, "--part="+PartRealm)
+	require.NoError(t, err)
+	require.Len(t, payloads, 1)
+	assert.Equal(t, "tag:arm.com,2025:cca_realm#1.0.0", payloads[0].Profile)
+
+	m := realmOf(t, payloads)
+
+	// the generated CoMID must satisfy the CCA realm profile constraints
+	require.NoError(t, m.Valid())
+
+	refVal := m.Triples.ReferenceValues.Values[0]
+
+	// the realm is identified by its initial measurement, which is also
+	// carried as a measurement of its own
+	require.NotNil(t, refVal.Environment.Class)
+	require.NotNil(t, refVal.Environment.Class.ClassID)
+
+	rim := refVal.Environment.Class.ClassID.Bytes()
+	assert.Contains(t, []int{32, 48, 64}, len(rim))
+
+	require.NotNil(t, refVal.Measurements.Values[0].Val.Digests)
+	assert.Equal(t, rim, (*refVal.Measurements.Values[0].Val.Digests)[0].Value)
+
+	// the initial measurement, the four extensible registers, and the
+	// personalization value this token happens to carry
+	assert.Equal(t, []string{
+		"cca.rim", "cca.rem0", "cca.rem1", "cca.rem2", "cca.rem3", "cca.rpv",
+	}, measurementKeys(t, m))
+
+	// the personalization value is a raw value rather than a digest
+	rpv := refVal.Measurements.Values[5]
+	assert.Nil(t, rpv.Val.Digests)
+	require.NotNil(t, rpv.Val.RawValue)
+
+	// a realm is identified by its measurements, not by a key
+	assert.Nil(t, m.Triples.AttestVerifKeys)
+}
+
+// The realm hash-alg-id claim of the legacy vector names SHA-256 while its
+// measurements are 64 bytes long, and ccatoken accepts that because it only
+// checks the claim is a non-empty string.
+//
+// Both halves come from the same token and one of them is wrong. Generating a
+// CoRIM from either would assert something the attester did not, so the
+// contradiction is reported rather than resolved.
+func Test_Generate_realm_inconsistent_hash_alg_claim(t *testing.T) {
+	_, err := generate(t, legacyToken, "--part="+PartRealm)
+
+	assert.ErrorContains(t, err,
+		`cca.rim: the token names hash algorithm "sha-256" for a measurement value of 64 bytes`)
+
+	// and the same when both parts are asked for, rather than silently
+	// emitting only the platform one
+	_, err = generate(t, legacyToken)
+	assert.ErrorContains(t, err, "the token names hash algorithm")
+}
+
 // The platform measurements of the same vector are consistent with its platform
 // hash-alg-id claim, so that half is generated normally. It also covers the
 // deprecated collection encoding, which must be accepted just like the CMW one.
@@ -150,6 +243,19 @@ func Test_Generate_platform_hash_alg_claim_is_used(t *testing.T) {
 		require.Len(t, digest.Value, 32)
 		assert.Equal(t, "sha-256", digest.Algorithm.String())
 	}
+}
+
+func Test_Generate_both_parts(t *testing.T) {
+	payloads, err := generate(t, tfRmmToken)
+	require.NoError(t, err)
+	require.Len(t, payloads, 2)
+
+	assert.Equal(t, PartPlatform, payloads[0].Label)
+	assert.Equal(t, PartRealm, payloads[1].Label)
+
+	// the two CoRIMs are of different profiles, which is why they cannot be
+	// merged into one
+	assert.NotEqual(t, payloads[0].Profile, payloads[1].Profile)
 }
 
 func Test_Generate_raw_value_mask_covers_the_whole_config(t *testing.T) {
@@ -256,8 +362,8 @@ func Test_Generate_golden(t *testing.T) {
 }
 
 // New must hand out independent flag state, so that one command cannot see the
-// flags of another: --part on the first instance must leave the second one on
-// the default.
+// flags of another: --part on the first instance must leave the second one on the
+// default, which generates both parts.
 func Test_New_returns_independent_instances(t *testing.T) {
 	fs := afero.NewOsFs()
 
@@ -266,16 +372,16 @@ func Test_New_returns_independent_instances(t *testing.T) {
 	require.NoError(t, err)
 
 	first := New()
-	require.NoError(t, newFlagSet(t, first).Parse([]string{"--part=" + PartRealm}))
+	require.NoError(t, newFlagSet(t, first).Parse([]string{"--part=" + PartPlatform}))
 
 	second := New()
 	require.NoError(t, newFlagSet(t, second).Parse(nil))
 
 	payloads, err := first.Generate(fs, g, []string{tfRmmToken})
 	require.NoError(t, err)
-	assert.Empty(t, payloads)
+	assert.Len(t, payloads, 1)
 
 	payloads, err = second.Generate(fs, g, []string{tfRmmToken})
 	require.NoError(t, err)
-	assert.Len(t, payloads, 1)
+	assert.Len(t, payloads, 2)
 }

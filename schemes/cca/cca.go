@@ -87,6 +87,15 @@ func (o *Scheme) Generate(
 		payloads = append(payloads, *payload)
 	}
 
+	if o.part == PartRealm || o.part == PartBoth {
+		payload, err := realmPayload(b, evidence)
+		if err != nil {
+			return nil, err
+		}
+
+		payloads = append(payloads, *payload)
+	}
+
 	return payloads, nil
 }
 
