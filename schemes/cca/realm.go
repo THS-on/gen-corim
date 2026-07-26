@@ -23,7 +23,6 @@ var realmExtendedMeasurementMkeys = []string{
 	corimcca.CCARealmExtendedMeasurement3Mkey,
 }
 
-//nolint:dupl // the same shape as platformPayload, over a different profile and claims
 func realmPayload(
 	b scheme.ComidBuilder, evidence *ccatoken.Evidence,
 ) (*scheme.Payload, error) {

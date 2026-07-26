@@ -15,8 +15,9 @@ import (
 	genpsa "github.com/veraison/gen-corim/schemes/psa"
 )
 
-//nolint:dupl // the same shape as realmPayload, over a different profile and claims
-func platformPayload(b scheme.ComidBuilder, evidence *ccatoken.Evidence) (*scheme.Payload, error) {
+func platformPayload(
+	b scheme.ComidBuilder, evidence *ccatoken.Evidence, verifKey *comid.CryptoKey,
+) (*scheme.Payload, error) {
 	// never nil: ccatoken.Evidence.Validate makes both claim sets mandatory
 	claims := evidence.PlatformClaims
 
@@ -25,7 +26,7 @@ func platformPayload(b scheme.ComidBuilder, evidence *ccatoken.Evidence) (*schem
 		return nil, err
 	}
 
-	if err := addPlatformTriples(m, claims); err != nil {
+	if err := addPlatformTriples(m, claims, verifKey); err != nil {
 		return nil, err
 	}
 
@@ -40,7 +41,9 @@ func platformPayload(b scheme.ComidBuilder, evidence *ccatoken.Evidence) (*schem
 	}, nil
 }
 
-func addPlatformTriples(m *comid.Comid, claims ccaplatform.IClaims) error {
+func addPlatformTriples(
+	m *comid.Comid, claims ccaplatform.IClaims, verifKey *comid.CryptoKey,
+) error {
 	implID, err := claims.GetImplID()
 	if err != nil {
 		return fmt.Errorf("error extracting implementation ID: %w", err)
@@ -61,6 +64,29 @@ func addPlatformTriples(m *comid.Comid, claims ccaplatform.IClaims) error {
 		Measurements: *measurements,
 	}) == nil {
 		return errors.New("error adding the reference value")
+	}
+
+	if verifKey == nil {
+		return nil
+	}
+
+	instID, err := claims.GetInstID()
+	if err != nil {
+		return fmt.Errorf("error extracting instance ID: %w", err)
+	}
+
+	instance, err := corimcca.NewInstancePlatformInstanceID(instID)
+	if err != nil {
+		return fmt.Errorf("error creating instance ID: %w", err)
+	}
+
+	keys := comid.NewCryptoKeys().Add(verifKey)
+
+	if m.AddAttestVerifKey(&comid.KeyTriple{
+		Environment: comid.Environment{Class: class, Instance: instance},
+		VerifKeys:   *keys,
+	}) == nil {
+		return errors.New("error adding the attestation verification key")
 	}
 
 	return nil

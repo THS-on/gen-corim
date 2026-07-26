@@ -25,11 +25,20 @@ const (
 	// tfRmmToken is a full CCA token in the CMW collection encoding, with
 	// both platform and realm claims.
 	tfRmmToken = "../../data/cca/tf-rmm/cca_token.cbor"
+	tfRmmKey   = "../../data/cca/tf-rmm/cca_platform.pub"
 
 	// legacyToken uses the deprecated collection encoding that ccatoken
 	// still accepts.
 	legacyToken = "../../data/cca/cca-evidence.cbor"
+	legacyKey   = "../../data/keys/es256-pub.json"
 
+	wrongKey = "../../data/keys/wrong-es256.json"
+
+	// a certificate over tfRmmKey, and the anchors that did and did not
+	// issue it; see data/PROVENANCE.md
+	testCPAKCert = "../../data/certs/cpak.pem"
+	testCA       = "../../data/certs/ca.pem"
+	testOtherCA  = "../../data/certs/other-ca.pem"
 	psaToken     = "../../data/psa/psa-evidence.cbor"
 	testTemplate = "../../data/templates/cca"
 
@@ -118,7 +127,7 @@ func measurementKeys(t *testing.T, m *comid.Comid) []string {
 }
 
 func Test_Generate_platform(t *testing.T) {
-	payloads, err := generate(t, tfRmmToken, "--part="+PartPlatform)
+	payloads, err := generate(t, tfRmmToken, "--key="+tfRmmKey, "--part="+PartPlatform)
 	require.NoError(t, err)
 	require.Len(t, payloads, 1)
 	assert.Equal(t, "tag:arm.com,2025:cca_platform#1.0.0", payloads[0].Profile)
@@ -163,10 +172,20 @@ func Test_Generate_platform(t *testing.T) {
 
 	assert.Positive(t, software)
 	assert.Equal(t, 1, config)
+
+	// the attestation verification key triple carries the CPAK
+	require.NotNil(t, m.Triples.AttestVerifKeys)
+	require.Len(t, *m.Triples.AttestVerifKeys, 1)
+
+	avk := (*m.Triples.AttestVerifKeys)[0]
+	require.NotNil(t, avk.Environment.Instance)
+	assert.Len(t, avk.Environment.Instance.Bytes(), 33)
+	require.Len(t, avk.VerifKeys, 1)
+	assert.Equal(t, comid.PKIXBase64KeyType, avk.VerifKeys[0].Type())
 }
 
 func Test_Generate_realm(t *testing.T) {
-	payloads, err := generate(t, tfRmmToken, "--part="+PartRealm)
+	payloads, err := generate(t, tfRmmToken, "--key="+tfRmmKey, "--part="+PartRealm)
 	require.NoError(t, err)
 	require.Len(t, payloads, 1)
 	assert.Equal(t, "tag:arm.com,2025:cca_realm#1.0.0", payloads[0].Profile)
@@ -212,14 +231,14 @@ func Test_Generate_realm(t *testing.T) {
 // CoRIM from either would assert something the attester did not, so the
 // contradiction is reported rather than resolved.
 func Test_Generate_realm_inconsistent_hash_alg_claim(t *testing.T) {
-	_, err := generate(t, legacyToken, "--part="+PartRealm)
+	_, err := generate(t, legacyToken, "--key="+legacyKey, "--part="+PartRealm)
 
 	assert.ErrorContains(t, err,
 		`cca.rim: the token names hash algorithm "sha-256" for a measurement value of 64 bytes`)
 
 	// and the same when both parts are asked for, rather than silently
 	// emitting only the platform one
-	_, err = generate(t, legacyToken)
+	_, err = generate(t, legacyToken, "--key="+legacyKey)
 	assert.ErrorContains(t, err, "the token names hash algorithm")
 }
 
@@ -227,7 +246,7 @@ func Test_Generate_realm_inconsistent_hash_alg_claim(t *testing.T) {
 // hash-alg-id claim, so that half is generated normally. It also covers the
 // deprecated collection encoding, which must be accepted just like the CMW one.
 func Test_Generate_platform_hash_alg_claim_is_used(t *testing.T) {
-	payloads, err := generate(t, legacyToken, "--part="+PartPlatform)
+	payloads, err := generate(t, legacyToken, "--key="+legacyKey, "--part="+PartPlatform)
 	require.NoError(t, err)
 	require.Len(t, payloads, 1)
 
@@ -246,7 +265,7 @@ func Test_Generate_platform_hash_alg_claim_is_used(t *testing.T) {
 }
 
 func Test_Generate_both_parts(t *testing.T) {
-	payloads, err := generate(t, tfRmmToken)
+	payloads, err := generate(t, tfRmmToken, "--key="+tfRmmKey)
 	require.NoError(t, err)
 	require.Len(t, payloads, 2)
 
@@ -259,7 +278,7 @@ func Test_Generate_both_parts(t *testing.T) {
 }
 
 func Test_Generate_raw_value_mask_covers_the_whole_config(t *testing.T) {
-	payloads, err := generate(t, tfRmmToken, "--part="+PartPlatform)
+	payloads, err := generate(t, tfRmmToken, "--key="+tfRmmKey, "--part="+PartPlatform)
 	require.NoError(t, err)
 
 	m := platformOf(t, payloads)
@@ -285,6 +304,37 @@ func Test_Generate_raw_value_mask_covers_the_whole_config(t *testing.T) {
 	t.Fatal("no platform configuration measurement generated")
 }
 
+func Test_Generate_skip_verify_without_key(t *testing.T) {
+	payloads, err := generate(t, tfRmmToken, "--skip-verify", "--part="+PartPlatform)
+	require.NoError(t, err)
+
+	m := platformOf(t, payloads)
+	require.NoError(t, m.Valid())
+
+	assert.Nil(t, m.Triples.AttestVerifKeys)
+}
+
+// A CPAK certificate verified to its trust anchor is the strongest thing --key
+// can say: without --trust-anchors the certificate is taken at face value.
+func Test_Generate_certificate_chain(t *testing.T) {
+	t.Run("verified to its anchor", func(t *testing.T) {
+		payloads, err := generate(t, tfRmmToken, "--key="+testCPAKCert, "--trust-anchors="+testCA)
+		require.NoError(t, err)
+		assert.Len(t, payloads, 2)
+	})
+
+	t.Run("without anchors, taken at face value", func(t *testing.T) {
+		payloads, err := generate(t, tfRmmToken, "--key="+testCPAKCert)
+		require.NoError(t, err)
+		assert.Len(t, payloads, 2)
+	})
+
+	t.Run("an anchor that did not issue it", func(t *testing.T) {
+		_, err := generate(t, tfRmmToken, "--key="+testCPAKCert, "--trust-anchors="+testOtherCA)
+		assert.ErrorContains(t, err, "error verifying the certificate in")
+	})
+}
+
 func Test_Generate_errors(t *testing.T) {
 	for _, tv := range []struct {
 		name     string
@@ -293,14 +343,26 @@ func Test_Generate_errors(t *testing.T) {
 		expected string
 	}{
 		{
+			name:     "no key",
+			token:    tfRmmToken,
+			expected: "no key supplied: use --key, or --skip-verify to generate from an unverified token",
+		},
+		{
+			name:     "wrong key",
+			token:    tfRmmToken,
+			args:     []string{"--key=" + wrongKey},
+			expected: "error verifying token",
+		},
+		{
 			name:     "bad part",
 			token:    tfRmmToken,
-			args:     []string{"--part=firmware"},
+			args:     []string{"--key=" + tfRmmKey, "--part=firmware"},
 			expected: `unsupported part "firmware", want "platform", "realm" or "both"`,
 		},
 		{
 			name:     "absent token",
 			token:    "../../data/cca/absent.cbor",
+			args:     []string{"--key=" + tfRmmKey},
 			expected: "error loading token from",
 		},
 		{
@@ -308,6 +370,7 @@ func Test_Generate_errors(t *testing.T) {
 			// rather than silently producing a half-populated CoRIM
 			name:     "psa token",
 			token:    psaToken,
+			args:     []string{"--key=" + legacyKey},
 			expected: "error decoding token from",
 		},
 	} {
@@ -322,7 +385,8 @@ func Test_Generate_golden(t *testing.T) {
 	fs := afero.NewOsFs()
 
 	s := New()
-	require.NoError(t, newFlagSet(t, s).Parse(nil))
+	flags := newFlagSet(t, s)
+	require.NoError(t, flags.Parse([]string{"--key=" + tfRmmKey}))
 
 	opts := &generator.Options{
 		TemplateDir: testTemplate,
@@ -372,10 +436,11 @@ func Test_New_returns_independent_instances(t *testing.T) {
 	require.NoError(t, err)
 
 	first := New()
-	require.NoError(t, newFlagSet(t, first).Parse([]string{"--part=" + PartPlatform}))
+	require.NoError(t, newFlagSet(t, first).Parse(
+		[]string{"--key=" + testCPAKCert, "--trust-anchors=" + testCA, "--part=" + PartPlatform}))
 
 	second := New()
-	require.NoError(t, newFlagSet(t, second).Parse(nil))
+	require.NoError(t, newFlagSet(t, second).Parse([]string{"--key=" + tfRmmKey}))
 
 	payloads, err := first.Generate(fs, g, []string{tfRmmToken})
 	require.NoError(t, err)
