@@ -31,6 +31,43 @@ updates this file in the same commit.
 | `snp/launch-config-amdsev.json` | the `success with kernel` case of `guest/guest_test.go` in [THS-on/sev-snp-measure-go](https://github.com/THS-on/sev-snp-measure-go) (`5963a48`) | its vCPU count and CPU model written as a launch config |
 | `snp/empty-kernel.img` | the same case, which passes an empty kernel and initrd | an empty file |
 
+## Generated here
+
+`certs/` is minted by [`certs/generate.go`](certs/generate.go), not taken from
+anywhere:
+
+```sh
+go run data/certs/generate.go
+```
+
+| file | what |
+|---|---|
+| `certs/ca.pem` | self-signed root, `CN=gen-corim test CA` |
+| `certs/other-ca.pem` | a second root that issued none of the below |
+| `certs/intermediate.pem` | a CA certificate `ca.pem` issued |
+| `certs/cert-chain.pem` | `intermediate.pem` then `ca.pem`, as a key distribution service publishes a chain |
+| `certs/iak.pem` | certifies the public key of `keys/es256-pub.json`, which signed `psa/psa-evidence.cbor` |
+| `certs/cpak.pem` | certifies `cca/tf-rmm/cca_platform.pub`, which signed `cca/tf-rmm/cca_token.cbor` |
+| `certs/crl.pem` | revocation list from `ca.pem`, revoking nothing |
+| `certs/crl-revoked.pem` | the same, revoking `iak.pem` and `cpak.pem` |
+| `certs/other-crl.pem` | revocation list from `other-ca.pem`, which covers no issuer in any chain here |
+
+They are generated because there is nothing to copy: no attestation scheme
+publishes an IAK or CPAK certificate. `psatoken` and `ccatoken` ship the signing
+keys as bare keys, the chains in `corim` and `cocli` certify a CoRIM *signer*,
+the only certificate in the PSA and CCA test data of `veraison/services` is
+AMD's ARK-Genoa used as a deliberately wrong trust anchor, and the CCA reference
+stack for QEMU signs with a hardcoded raw key
+([`plat/qemu/common/qemu_realm_attest_key.c`](https://github.com/ARM-software/arm-trusted-firmware/blob/master/plat/qemu/common/qemu_realm_attest_key.c)).
+
+What the fixtures do carry is real: the certified keys are the ones the token
+vectors were actually signed with, so a chain that verifies leads to a token
+that verifies. Neither the CCA nor the PSA attestation specifications define an
+X.509 profile for these certificates, so the shape is the minimum a chain needs
+- `digitalSignature` on the leaf, `keyCertSign` and `cRLSign` on the authorities.
+Validity runs to 2046 and the tests pin the instant they check against, so
+nothing here starts failing on a date.
+
 ## Notes
 
 - The two `es256-*` files are **one key pair**, not two keys: `es256-pub.json` is
