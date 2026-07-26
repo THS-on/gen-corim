@@ -26,6 +26,7 @@ const ProfileURI = "tag:amd.com,2025:snp-corim-profile"
 
 // Scheme generates reference values from a SEV-SNP attestation report.
 type Scheme struct {
+	scheme.VerifyOptions
 	ovmfFile       string
 	launchConfFile string
 	kernelFile     string
@@ -35,7 +36,15 @@ type Scheme struct {
 }
 
 // New returns a SEV-SNP scheme with its own flag state.
-func New() scheme.Scheme { return &Scheme{} }
+func New() scheme.Scheme {
+	return &Scheme{
+		VerifyOptions: scheme.NewVerifyOptions(scheme.VerifyConfig{
+			KeyUsage:          "VCEK or VLEK certificate, in PEM or DER format, used to verify the report",
+			SkipVerifyUsage:   "do not check the report signature",
+			HasBuiltinAnchors: true,
+		}),
+	}
+}
 
 func (o *Scheme) Use() string { return "snp <report-file>" }
 
@@ -54,7 +63,7 @@ firmware image, once for every vCPU count from 1 up to the max-vcpus of the
 launch configuration, and one CoMID is generated per count. This describes VMs
 that have not been launched yet.
 
-	gen-corim snp report.bin --launch-config=launch.json \
+	gen-corim snp report.bin --key=vcek.pem --launch-config=launch.json \
 		--ovmf=OVMF_CODE.fd --template-dir=templates
 
 The launch configuration names the vCPU count and CPU model of the VM, and may
@@ -75,13 +84,39 @@ a single CoMID is generated. The report's own measurement already binds the
 vCPU count, CPU model and firmware of the machine that produced it, so no
 launch configuration is accepted in this mode.
 
-	gen-corim snp report.bin --template-dir=templates
+	gen-corim snp report.bin --key=vcek.pem --template-dir=templates
+
+The report signature is checked against the VCEK or VLEK certificate given with
+--key, unless --skip-verify is used. An extended report carries its own
+certificate table, and where it does the certificate is taken from there and
+--key may be left out.
+
+That certificate is itself verified against AMD's trust anchors, which
+gen-corim carries for Milan, Genoa and Turin, so a certificate that is not a
+KDS-issued endorsement key of a currently valid chain is rejected. Newer
+product lines need their chain supplying with --trust-anchors, in the format
+the AMD key distribution service publishes it:
+
+	gen-corim snp report.bin --key=vcek.pem --trust-anchors=cert_chain.pem \
+		--template-dir=templates
+
+Revocation is not checked unless --crl names a list, which has to be signed by
+the AMD root key of the product line.
+
+gen-corim makes no network calls, so none of these is ever fetched for you.
+snpguest retrieves all three for a given report, taking the chip ID and TCB
+version to ask for from the report itself:
+
+	snpguest fetch vcek pem ./certs report.bin
+	snpguest fetch ca   pem ./certs -r report.bin
+	snpguest fetch crl  pem ./certs -r report.bin
 `
 }
 
 func (o *Scheme) Args() cobra.PositionalArgs { return cobra.ExactArgs(1) }
 
 func (o *Scheme) AddFlags(flags *pflag.FlagSet) {
+	o.VerifyOptions.AddFlags(flags)
 	flags.StringVar(&o.ovmfFile, "ovmf", "",
 		"OVMF firmware image the VM boots, used to compute its launch measurement")
 	flags.StringVarP(&o.launchConfFile, "launch-config", "l", "",
@@ -109,9 +144,25 @@ func (o *Scheme) Generate(
 		return nil, fmt.Errorf("error loading report from %s: %w", args[0], err)
 	}
 
-	report, err := abi.ReportToProto(raw)
+	report, chain, err := decodeReport(raw)
 	if err != nil {
 		return nil, fmt.Errorf("error decoding report from %s: %w", args[0], err)
+	}
+
+	v, err := o.Resolve(fs)
+	if err != nil {
+		return nil, err
+	}
+
+	if v.Mode != scheme.ModeSkip {
+		cert, cerr := endorsementCert(v, chain, args[0])
+		if cerr != nil {
+			return nil, cerr
+		}
+
+		if cerr = o.verifyReport(fs, v, raw[:abi.ReportSize], report, cert); cerr != nil {
+			return nil, fmt.Errorf("error verifying report from %s: %w", args[0], cerr)
+		}
 	}
 
 	launchMeasurements, err := o.launchMeasurements(fs, report)
@@ -149,7 +200,14 @@ func (o *Scheme) Generate(
 	return []scheme.Payload{{Profile: ProfileURI, Comids: comids}}, nil
 }
 
+// validFlags checks the flags describing the launch measurement. Whether a
+// certificate was supplied cannot be settled here: a report may carry its own,
+// which is only known once it has been read.
 func (o *Scheme) validFlags() error {
+	if err := o.Valid(); err != nil {
+		return err
+	}
+
 	// The two ways of arriving at a launch measurement are exclusive:
 	// computing one needs both the firmware and the VM shape, and taking the
 	// report's own needs neither.

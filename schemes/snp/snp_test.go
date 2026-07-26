@@ -4,10 +4,17 @@
 package snp
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/hex"
 	"flag"
+	"math/big"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/google/go-sev-guest/abi"
 	"github.com/google/go-sev-guest/proto/sevsnp"
@@ -18,6 +25,7 @@ import (
 	"github.com/veraison/corim/comid"
 	"github.com/veraison/corim/corim"
 	"github.com/veraison/gen-corim/generator"
+	"github.com/veraison/gen-corim/keyutil"
 	"github.com/veraison/gen-corim/scheme"
 )
 
@@ -132,7 +140,7 @@ func reportMeasurement(t *testing.T) []byte {
 // In as-reported mode the launch measurement is the report's own, and exactly
 // one CoMID is produced: the report already binds a single VM shape.
 func Test_Generate_as_reported(t *testing.T) {
-	payloads, err := generate(t, testReport)
+	payloads, err := generate(t, testReport, "--skip-verify")
 	require.NoError(t, err)
 	require.Len(t, payloads, 1)
 
@@ -148,7 +156,7 @@ func Test_Generate_as_reported(t *testing.T) {
 // In synthesized mode there is one CoMID per vCPU count, each with its own
 // launch measurement, and none of them is the report's.
 func Test_Generate_synthesized(t *testing.T) {
-	payloads, err := generate(t, testReport,
+	payloads, err := generate(t, testReport, "--skip-verify",
 		"--ovmf="+testOVMF, "--launch-config="+testLaunchConfig)
 	require.NoError(t, err)
 	require.Len(t, payloads, 1)
@@ -170,7 +178,7 @@ func Test_Generate_synthesized(t *testing.T) {
 }
 
 func Test_Generate_measurement_keys(t *testing.T) {
-	payloads, err := generate(t, testReport)
+	payloads, err := generate(t, testReport, "--skip-verify")
 	require.NoError(t, err)
 
 	values := payloads[0].Comids[0].Triples.ReferenceValues.Values[0].Measurements.Values
@@ -325,35 +333,48 @@ func Test_Generate_errors(t *testing.T) {
 		expected string
 	}{
 		{
+			name:     "no key",
+			report:   testReport,
+			expected: "no certificate supplied: the report carries none, so use --key, or --skip-verify",
+		},
+		{
 			name:     "absent report",
 			report:   "../../data/snp/absent.bin",
+			args:     []string{"--skip-verify"},
 			expected: "error loading report from",
 		},
 		{
 			// a launch config is not a report
 			name:     "not a report",
 			report:   testLaunchConfig,
+			args:     []string{"--skip-verify"},
 			expected: "error decoding report from",
+		},
+		{
+			name:     "absent certificate",
+			report:   testReport,
+			args:     []string{"--key=../../data/snp/absent.pem"},
+			expected: "error loading key from",
 		},
 		{
 			// the two flags are meaningless apart: one says what to
 			// measure, the other what to measure it for
 			name:   "ovmf without a launch config",
 			report: testReport,
-			args:   []string{"--ovmf=" + testOVMF},
+			args:   []string{"--skip-verify", "--ovmf=" + testOVMF},
 			expected: "--ovmf and --launch-config must be used together: supply both to " +
 				"compute launch measurements, or neither to use the one in the report",
 		},
 		{
 			name:     "launch config without ovmf",
 			report:   testReport,
-			args:     []string{"--launch-config=" + testLaunchConfig},
+			args:     []string{"--skip-verify", "--launch-config=" + testLaunchConfig},
 			expected: "--ovmf and --launch-config must be used together",
 		},
 		{
 			name:   "absent ovmf",
 			report: testReport,
-			args: []string{
+			args: []string{"--skip-verify",
 				"--ovmf=../../data/snp/absent.fd", "--launch-config=" + testLaunchConfig},
 			expected: "error loading OVMF from",
 		},
@@ -361,9 +382,16 @@ func Test_Generate_errors(t *testing.T) {
 			// a report is not a launch config
 			name:   "bad launch config",
 			report: testReport,
-			args: []string{
+			args: []string{"--skip-verify",
 				"--ovmf=" + testOVMF, "--launch-config=" + testReport},
 			expected: "error decoding launch configuration from",
+		},
+		{
+			// --key names a certificate, not a bare key
+			name:     "key instead of a certificate",
+			report:   testReport,
+			args:     []string{"--key=../../data/psa/tfm/public.pem"},
+			expected: "--key has to name a certificate",
 		},
 		{
 			// the direct boot parameters change a computed launch
@@ -371,21 +399,21 @@ func Test_Generate_errors(t *testing.T) {
 			// in the report
 			name:   "kernel without ovmf",
 			report: testReport,
-			args:   []string{"--kernel=" + testEmptyKernel},
+			args:   []string{"--skip-verify", "--kernel=" + testEmptyKernel},
 			expected: "--kernel only applies when a launch measurement is computed, " +
 				"so it needs --ovmf and --launch-config",
 		},
 		{
 			name:   "initrd without ovmf",
 			report: testReport,
-			args:   []string{"--initrd=" + testEmptyKernel},
+			args:   []string{"--skip-verify", "--initrd=" + testEmptyKernel},
 			expected: "--initrd only applies when a launch measurement is computed, " +
 				"so it needs --ovmf and --launch-config",
 		},
 		{
 			name:   "append without ovmf",
 			report: testReport,
-			args:   []string{"--append=console=ttyS0"},
+			args:   []string{"--skip-verify", "--append=console=ttyS0"},
 			expected: "--append only applies when a launch measurement is computed, " +
 				"so it needs --ovmf and --launch-config",
 		},
@@ -395,7 +423,7 @@ func Test_Generate_errors(t *testing.T) {
 			// hashes table is keyed off the kernel
 			name:   "initrd without a kernel",
 			report: testReport,
-			args: []string{
+			args: []string{"--skip-verify",
 				"--ovmf=" + testDirectBootOVMF, "--launch-config=" + testDirectBootConfig,
 				"--initrd=" + testEmptyKernel},
 			expected: "--initrd is only measured alongside a directly booted kernel, " +
@@ -404,7 +432,7 @@ func Test_Generate_errors(t *testing.T) {
 		{
 			name:   "append without a kernel",
 			report: testReport,
-			args: []string{
+			args: []string{"--skip-verify",
 				"--ovmf=" + testDirectBootOVMF, "--launch-config=" + testDirectBootConfig,
 				"--append=console=ttyS0"},
 			expected: "--append is only measured alongside a directly booted kernel, " +
@@ -413,7 +441,7 @@ func Test_Generate_errors(t *testing.T) {
 		{
 			name:   "absent kernel",
 			report: testReport,
-			args: []string{
+			args: []string{"--skip-verify",
 				"--ovmf=" + testOVMF, "--launch-config=" + testLaunchConfig,
 				"--kernel=../../data/snp/absent.img"},
 			expected: "error loading kernel from ../../data/snp/absent.img",
@@ -421,7 +449,7 @@ func Test_Generate_errors(t *testing.T) {
 		{
 			name:   "absent initrd",
 			report: testReport,
-			args: []string{
+			args: []string{"--skip-verify",
 				"--ovmf=" + testOVMF, "--launch-config=" + testLaunchConfig,
 				"--kernel=" + testEmptyKernel, "--initrd=../../data/snp/absent.img"},
 			expected: "error loading initrd from ../../data/snp/absent.img",
@@ -432,7 +460,7 @@ func Test_Generate_errors(t *testing.T) {
 			// producing a measurement that ignores it
 			name:   "firmware that cannot measure a kernel",
 			report: testReport,
-			args: []string{
+			args: []string{"--skip-verify",
 				"--ovmf=" + testOVMF, "--launch-config=" + testLaunchConfig,
 				"--kernel=" + testEmptyKernel, "--append=console=ttyS0"},
 			expected: "OVMF metadata doesn't include SNP_KERNEL_HASHES section",
@@ -445,13 +473,105 @@ func Test_Generate_errors(t *testing.T) {
 	}
 }
 
+// selfSignedCert is a certificate of the right key type that AMD had no part
+// in, which is what someone passing an arbitrary certificate to --key supplies.
+func selfSignedCert(t *testing.T) string {
+	t.Helper()
+
+	key, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	require.NoError(t, err)
+
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "not a VCEK"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+	}
+
+	der, err := x509.CreateCertificate(rand.Reader, template, template, key.Public(), key)
+	require.NoError(t, err)
+
+	path := filepath.Join(t.TempDir(), "cert.der")
+	require.NoError(t, afero.WriteFile(afero.NewOsFs(), path, der, 0644))
+
+	return path
+}
+
+// A certificate AMD did not issue must be rejected, which is the whole point of
+// passing one. It fails on its shape - a VCEK is an ECDSA P-384 key certified
+// with RSASSA-PSS and carries KDS extensions - before its signature over the
+// report is ever considered.
+func Test_Generate_wrong_certificate(t *testing.T) {
+	_, err := generate(t, testReport, "--key="+selfSignedCert(t))
+
+	assert.ErrorContains(t, err, "error verifying report from")
+	assert.ErrorContains(t, err, "expected SHA-384 with RSASSA-PSS")
+}
+
+// Without a chain to verify, the certificate is only checked for having signed
+// the report, which a self-signed one has not.
+func Test_Generate_wrong_certificate_without_verification(t *testing.T) {
+	_, err := generate(t, testReport, "--key="+selfSignedCert(t), "--skip-verify")
+	assert.NoError(t, err)
+}
+
+// extendedReport is the test report with a certificate table appended, as
+// GET_EXT_REPORT returns one, carrying cert as its VCEK.
+func extendedReport(t *testing.T, certFile string) string {
+	t.Helper()
+
+	fs := afero.NewOsFs()
+
+	raw, err := afero.ReadFile(fs, testReport)
+	require.NoError(t, err)
+
+	cert, err := keyutil.CertificateFromFile(fs, certFile)
+	require.NoError(t, err)
+
+	table := abi.CertsFromProto(&sevsnp.CertificateChain{VcekCert: cert.Raw})
+
+	path := filepath.Join(t.TempDir(), "extended-report.bin")
+	require.NoError(t, afero.WriteFile(fs, path, append(raw, table.Marshal()...), 0644))
+
+	return path
+}
+
+// An extended report carries the certificate it was signed with, so --key has
+// nothing to add and may be left out.
+func Test_Generate_extended_report(t *testing.T) {
+	cert := selfSignedCert(t)
+	report := extendedReport(t, cert)
+
+	t.Run("the certificate is taken from the report", func(t *testing.T) {
+		// it is still no VCEK, which is how we know it was used
+		_, err := generate(t, report)
+		assert.ErrorContains(t, err, "error verifying report from")
+		assert.ErrorContains(t, err, "expected SHA-384 with RSASSA-PSS")
+	})
+
+	t.Run("the same certificate in --key agrees", func(t *testing.T) {
+		_, err := generate(t, report, "--key="+cert)
+		assert.ErrorContains(t, err, "expected SHA-384 with RSASSA-PSS")
+	})
+
+	t.Run("a different certificate in --key is a contradiction", func(t *testing.T) {
+		_, err := generate(t, report, "--key="+selfSignedCert(t))
+		assert.ErrorContains(t, err, "is not the one")
+	})
+
+	t.Run("nothing is verified with skip-verify", func(t *testing.T) {
+		_, err := generate(t, report, "--skip-verify")
+		assert.NoError(t, err)
+	})
+}
+
 // The launch measurement of a directly booted kernel, checked against the value
 // the reference implementation produces. sev-snp-measure-go's own test suite
 // derives this digest from sev-snp-measure.py for the same inputs, so matching
 // it shows that gen-corim drives the computation the way the reference tool
 // does - the guest features, VMM type and vCPU count it passes included.
 func Test_Generate_direct_boot_matches_the_reference_implementation(t *testing.T) {
-	payloads, err := generate(t, testReport,
+	payloads, err := generate(t, testReport, "--skip-verify",
 		"--ovmf="+testDirectBootOVMF, "--launch-config="+testDirectBootConfig,
 		"--kernel="+testEmptyKernel, "--initrd="+testEmptyKernel,
 		"--append=console=ttyS0 loglevel=7")
@@ -472,7 +592,7 @@ func Test_Generate_guest_features_match_the_reference_implementation(t *testing.
 		config := writeLaunchConfig(t,
 			`{"max-vcpus": 1, "cpu-model": "EPYC-v4", "guest-features": "0x21"}`)
 
-		payloads, err := generate(t, testReport,
+		payloads, err := generate(t, testReport, "--skip-verify",
 			"--ovmf="+testDirectBootOVMF, "--launch-config="+config,
 			"--kernel="+testEmptyKernel, "--initrd="+testEmptyKernel,
 			"--append=console=ttyS0 loglevel=7")
@@ -489,7 +609,7 @@ func Test_Generate_guest_features_match_the_reference_implementation(t *testing.
 		config := writeLaunchConfig(t,
 			`{"max-vcpus": 4, "cpu-model": "EPYC-v4", "guest-features": "0x21"}`)
 
-		payloads, err := generate(t, testReport,
+		payloads, err := generate(t, testReport, "--skip-verify",
 			"--ovmf="+testDirectBootOVMF, "--launch-config="+config,
 			"--kernel="+testEmptyKernel, "--initrd="+testEmptyKernel)
 		require.NoError(t, err)
@@ -511,7 +631,7 @@ func Test_Generate_launch_config_fields_change_the_measurement(t *testing.T) {
 
 		config := writeLaunchConfig(t, `{"max-vcpus": 1, "cpu-model": "EPYC-v4"`+fields+`}`)
 
-		payloads, err := generate(t, testReport,
+		payloads, err := generate(t, testReport, "--skip-verify",
 			"--ovmf="+testOVMF, "--launch-config="+config)
 		require.NoError(t, err)
 		require.Len(t, payloads[0].Comids, 1)
@@ -531,11 +651,11 @@ func Test_Generate_launch_config_fields_change_the_measurement(t *testing.T) {
 // one. It is also the only case measuring a kernel without an initrd, which
 // --initrd being optional allows.
 func Test_Generate_kernel_without_an_initrd(t *testing.T) {
-	withoutKernel, err := generate(t, testReport,
+	withoutKernel, err := generate(t, testReport, "--skip-verify",
 		"--ovmf="+testDirectBootOVMF, "--launch-config="+testDirectBootConfig)
 	require.NoError(t, err)
 
-	withKernel, err := generate(t, testReport,
+	withKernel, err := generate(t, testReport, "--skip-verify",
 		"--ovmf="+testDirectBootOVMF, "--launch-config="+testDirectBootConfig,
 		"--kernel="+testEmptyKernel)
 	require.NoError(t, err)
@@ -553,11 +673,13 @@ func Test_Generate_golden(t *testing.T) {
 	}{
 		{
 			name:   "as reported",
+			args:   []string{"--skip-verify"},
 			golden: "snp-endorsements.cbor",
 		},
 		{
 			name: "synthesized",
 			args: []string{
+				"--skip-verify",
 				"--ovmf=" + testOVMF,
 				"--launch-config=" + testLaunchConfig,
 			},
@@ -643,8 +765,8 @@ func Test_LaunchConfig_Valid(t *testing.T) {
 }
 
 // New must hand out independent flag state, so that one command cannot see the
-// flags of another: --csp-id on the first instance, which the chip-signed test
-// report rejects, must leave the second one without one.
+// flags of another: --skip-verify on the first instance must leave the second one
+// still demanding a key.
 func Test_New_returns_independent_instances(t *testing.T) {
 	fs := afero.NewOsFs()
 
@@ -653,14 +775,14 @@ func Test_New_returns_independent_instances(t *testing.T) {
 	require.NoError(t, err)
 
 	first := New()
-	require.NoError(t, newFlagSet(t, first).Parse([]string{"--csp-id=acme"}))
+	require.NoError(t, newFlagSet(t, first).Parse([]string{"--skip-verify"}))
 
 	second := New()
 	require.NoError(t, newFlagSet(t, second).Parse(nil))
 
 	_, err = first.Generate(fs, g, []string{testReport})
-	assert.ErrorContains(t, err, "--csp-id does not apply")
+	require.NoError(t, err)
 
 	_, err = second.Generate(fs, g, []string{testReport})
-	require.NoError(t, err)
+	assert.ErrorContains(t, err, "no certificate supplied")
 }

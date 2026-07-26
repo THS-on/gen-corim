@@ -86,6 +86,17 @@ func (o *VerifyOptions) KeyFile() string { return o.keyFile }
 
 func (o *VerifyOptions) SkipVerify() bool { return o.skipVerify }
 
+// AnchorFiles are the paths given to --trust-anchors, for a scheme that builds
+// its own trust material out of them. It is empty where the anchors are the
+// built-in ones, which carry no path.
+func (o *VerifyOptions) AnchorFiles() []string {
+	if o.anchorSource() != SourceFiles {
+		return nil
+	}
+
+	return o.anchorFiles
+}
+
 func (o *VerifyOptions) AddFlags(flags *pflag.FlagSet) {
 	flags.StringVarP(&o.keyFile, "key", "k", "", o.cfg.KeyUsage)
 	flags.BoolVar(&o.skipVerify, "skip-verify", false, o.cfg.SkipVerifyUsage)
@@ -240,7 +251,7 @@ func (o *VerifyOptions) loadTrustMaterial(fs afero.Fs, v *Verifier) error {
 	// certificate table does, in which case --key is absent by design.
 	if o.keyFile != "" && v.Leaf == nil {
 		return errors.New(
-			"--trust-anchors verifies a certificate chain, so --key has to name a certificate")
+			"--key has to name a certificate: it is a chain that is verified, and a bare key has none")
 	}
 
 	readFile := func(path string) ([]byte, error) { return afero.ReadFile(fs, path) }
