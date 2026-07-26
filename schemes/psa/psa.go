@@ -7,21 +7,32 @@ package psa
 import (
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/spf13/afero"
 	"github.com/spf13/cobra"
-	"github.com/spf13/pflag"
 	"github.com/veraison/corim/comid"
 	corimpsa "github.com/veraison/corim/profiles/psa"
+	"github.com/veraison/gen-corim/keyutil"
 	"github.com/veraison/gen-corim/scheme"
 	"github.com/veraison/psatoken"
 )
 
-// Scheme generates a CoRIM carrying the reference values of a PSA attester.
-type Scheme struct{}
+// Scheme generates a CoRIM carrying the reference values and the attestation
+// verification key of a PSA attester.
+type Scheme struct {
+	scheme.VerifyOptions
+}
 
 // New returns a PSA scheme with its own flag state.
-func New() scheme.Scheme { return &Scheme{} }
+func New() scheme.Scheme {
+	return &Scheme{
+		VerifyOptions: scheme.NewVerifyOptions(scheme.VerifyConfig{
+			KeyUsage:        "IAK public key or certificate, in JWK, PEM or DER format, used to verify the token",
+			SkipVerifyUsage: "do not check the token signature",
+		}),
+	}
+}
 
 func (o *Scheme) Use() string { return "psa <token-file>" }
 
@@ -31,20 +42,38 @@ func (o *Scheme) Long() string {
 	return `Generate PSA endorsements from a PSA attestation token.
 
 The software components of the token become the reference values of the
-generated CoRIM.
+generated CoRIM, and the key supplied with --key becomes its attestation
+verification key. The token signature is checked against that key first, unless
+--skip-verify is given.
 
-	gen-corim psa token.cbor --template-dir=templates
+	gen-corim psa token.cbor --key=iak-pub.json --template-dir=templates
+
+--key may name an IAK certificate rather than a bare key. Given
+--trust-anchors, the certificate is verified to those anchors before its key is
+trusted, and --crl checks the chain against a revocation list. Without
+--trust-anchors the certificate is only a container for the key, and nothing
+vouches for it.
+
+	gen-corim psa token.cbor --key=iak.pem --trust-anchors=ca.pem \
+		--template-dir=templates
 `
 }
 
 func (o *Scheme) Args() cobra.PositionalArgs { return cobra.ExactArgs(1) }
 
-func (o *Scheme) AddFlags(flags *pflag.FlagSet) {}
-
-// Generate decodes the token and turns its claims into a CoMID.
+// Generate decodes the token, verifies it and turns its claims into a CoMID.
 func (o *Scheme) Generate(
 	fs afero.Fs, b scheme.ComidBuilder, args []string,
 ) ([]scheme.Payload, error) {
+	if o.KeyFile() == "" && !o.SkipVerify() {
+		return nil, errors.New("no key supplied: use --key, or --skip-verify to generate from an unverified token")
+	}
+
+	v, err := o.Resolve(fs)
+	if err != nil {
+		return nil, err
+	}
+
 	token, err := afero.ReadFile(fs, args[0])
 	if err != nil {
 		return nil, fmt.Errorf("error loading token from %s: %w", args[0], err)
@@ -55,12 +84,32 @@ func (o *Scheme) Generate(
 		return nil, fmt.Errorf("error decoding token from %s: %w", args[0], err)
 	}
 
+	var verifKey *comid.CryptoKey
+
+	if v.Key != nil {
+		if v.Mode == scheme.ModeChain {
+			if err = v.VerifyLeaf(time.Now()); err != nil {
+				return nil, fmt.Errorf("error verifying the certificate in %s: %w", o.KeyFile(), err)
+			}
+		}
+
+		if v.Mode != scheme.ModeSkip {
+			if err = evidence.Verify(v.Key); err != nil {
+				return nil, fmt.Errorf("error verifying token from %s: %w", args[0], err)
+			}
+		}
+
+		if verifKey, err = keyutil.PKIXBase64Key(v.Key); err != nil {
+			return nil, err
+		}
+	}
+
 	m, err := b.NewComid(corimpsa.ProfileURI)
 	if err != nil {
 		return nil, err
 	}
 
-	if err := addTriples(m, evidence.Claims); err != nil {
+	if err := addTriples(m, evidence.Claims, verifKey); err != nil {
 		return nil, err
 	}
 
@@ -74,9 +123,9 @@ func (o *Scheme) Generate(
 	}}, nil
 }
 
-// addTriples populates the CoMID with the reference values derived from the
-// token claims.
-func addTriples(m *comid.Comid, claims psatoken.IClaims) error {
+// addTriples populates the CoMID with the reference values and the attestation
+// verification key derived from the token claims.
+func addTriples(m *comid.Comid, claims psatoken.IClaims, verifKey *comid.CryptoKey) error {
 	implID, err := claims.GetImplID()
 	if err != nil {
 		return fmt.Errorf("error extracting implementation ID: %w", err)
@@ -97,6 +146,29 @@ func addTriples(m *comid.Comid, claims psatoken.IClaims) error {
 		Measurements: *measurements,
 	}) == nil {
 		return errors.New("error adding the reference value")
+	}
+
+	if verifKey == nil {
+		return nil
+	}
+
+	instID, err := claims.GetInstID()
+	if err != nil {
+		return fmt.Errorf("error extracting instance ID: %w", err)
+	}
+
+	instance, err := comid.NewUEIDInstance(instID)
+	if err != nil {
+		return fmt.Errorf("error creating instance ID: %w", err)
+	}
+
+	keys := comid.NewCryptoKeys().Add(verifKey)
+
+	if m.AddAttestVerifKey(&comid.KeyTriple{
+		Environment: comid.Environment{Class: class, Instance: instance},
+		VerifKeys:   *keys,
+	}) == nil {
+		return errors.New("error adding the attestation verification key")
 	}
 
 	return nil
